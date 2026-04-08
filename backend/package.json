@@ -1,5 +1,5 @@
 {
-  "name": "jardas-bot-backend",
+  "name": "house-chat-backend",
   "version": "1.0.0",
   "description": "Backend do Jardas Bot - Assistente Imobiliário com IA",
   "main": "src/index.js",

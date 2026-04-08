@@ -5,7 +5,7 @@ Web app de chat com IA (Claude Haiku 4.5) integrado ao Supabase, com autenticaç
 ## Arquitetura
 
 ```
-jardas-bot/
+house-chat/
 ├── backend/          # Node.js + Express
 │   └── src/
 │       ├── ai/               # Mapeamento de intenção → permissão
