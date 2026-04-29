@@ -47,7 +47,7 @@ export default function LoginPage() {
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-[#67c900] opacity-10 rounded-full blur-[100px] pointer-events-none" />
         
         <div className="relative z-10 flex items-center">
-          <Image src={logo} alt="Jardas Bot Logo" width={250} height={170} priority />
+          <Image src={logo} alt="House Bot Logo" width={250} height={170} priority />
         </div>
         
         <div className="relative z-10 max-w-md">
@@ -76,7 +76,7 @@ export default function LoginPage() {
         >
           {/* Mobile Logo */}
           <div className="flex lg:hidden items-center mb-8 justify-center">
-             <Image src={logo} alt="Jardas Bot Logo" width={64} height={64} className="opacity-90" />
+             <Image src={logo} alt="House Bot Logo" width={64} height={64} className="opacity-90" />
           </div>
 
           <h2 className="text-3xl font-bold text-gray-900 mb-2">

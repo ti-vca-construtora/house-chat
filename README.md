@@ -1,6 +1,6 @@
 # HouseChat — Assistente Imobiliário com IA da VCA CONSTRUTORA
 
-Web app de chat com IA (Claude Haiku 4.5) integrado ao Supabase, com autenticação e controle de acesso baseado em roles (RBAC).
+Web app de chat com IA via OpenAI integrado ao Supabase, com autenticação e controle de acesso baseado em roles (RBAC).
 
 ## Arquitetura
 
@@ -13,7 +13,7 @@ house-chat/
 │       ├── database/         # Cliente Supabase (admin)
 │       ├── middlewares/      # Auth (JWT) + Permissões (RBAC)
 │       ├── routes/           # Endpoints da API
-│       └── services/         # Claude, Supabase, Permissão
+│       └── services/         # OpenAI, Supabase, Permissão
 ├── frontend/         # Next.js 15 + TypeScript + Tailwind
 │   └── src/
 │       ├── app/              # Next.js App Router
@@ -43,7 +43,7 @@ Usuário envia mensagem
    │         │
 Erro 403   Busca dados no Supabase
 (sem IA)         ↓
-            [5] Envia contexto para Claude
+            [5] Envia contexto para OpenAI
                 ↓
             [6] Retorna resposta
 ```
@@ -81,7 +81,9 @@ npm run dev
 |---|---|
 | `SUPABASE_URL` | Settings → API → Project URL |
 | `SUPABASE_SERVICE_KEY` | Settings → API → service_role key |
-| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
+| `OPENAI_API_KEY` | Chave da API OpenAI |
+| `OPENAI_MODEL` | Modelo principal, ex: `gpt-5.2` |
+| `OPENAI_MODEL_FALLBACK` | Modelo fallback, ex: `gpt-5` |
 | `FRONTEND_URL` | `http://localhost:3000` |
 | `CVCRM_EMAIL` | Email da API CVCRM |
 | `CVCRM_TOKEN` | Token da API CVCRM |
@@ -134,9 +136,31 @@ WHERE role = 'user'
 
 1. Crie a tabela no Supabase (adicionar ao `schema.sql`)
 2. Adicione a permissão em `supabase/schema.sql` → tabela `permissions`
-3. No backend, adicione o padrão regex em `src/ai/intentMapper.js`
-4. No backend, adicione a query em `src/services/supabaseService.js` → `fetchContextData()`
-5. Conceda a permissão ao role desejado na tabela `role_permissions`
+3. Atualize o catálogo em `src/services/businessCatalog.js`
+4. Se for uma consulta recorrente e critica, adicione ou ajuste o plano em `src/services/queryPlanner.js`
+5. Se precisar de calculo especifico, implemente o executor em `src/services/queryExecutors.js`
+6. Conceda a permissão ao role desejado na tabela `role_permissions`
+
+## Motor de consultas da IA
+
+O backend usa uma arquitetura híbrida:
+
+- A OpenAI interpreta a pergunta e extrai intents/entities.
+- `queryPlanner` escolhe um plano determinístico validado.
+- `queryExecutors` consulta o Supabase, cruza tabelas e calcula o payload final.
+- A IA recebe `answer_payload` e apenas redige a resposta.
+
+Esse desenho evita que a IA invente joins, ignore tipologia/preço ou ofereça ações que o sistema não executa.
+
+## Carga BigQuery -> Supabase
+
+Para recriar e carregar somente as tabelas recebidas do BigQuery, use:
+
+- `supabase/bigquery_import_schema.sql` para criar as tabelas de destino no Supabase
+- `backend/.env` para configurar `GOOGLE_CLOUD_PROJECT_ID`, `BIGQUERY_DATASET` e `GOOGLE_APPLICATION_CREDENTIALS_BASE64`
+- `supabase/bigquery_import_runbook.md` para a ordem operacional da sincronizacao BigQuery via backend
+
+Esse fluxo nao altera `users`, `permissions`, `role_permissions`, `conversations` ou `messages`.
 
 ## Stack
 
@@ -144,7 +168,7 @@ WHERE role = 'user'
 - **Backend**: Node.js, Express, Zod
 - **Banco**: Supabase (PostgreSQL) sem RLS, com controle no código
 - **Auth**: Supabase Auth (JWT)
-- **IA**: Claude Haiku 4.5 (Anthropic)
+- **IA**: OpenAI Responses API (`gpt-5.4-mini`)
 
 ## CONFIGURANDO PERMISSÕES
 
@@ -159,7 +183,7 @@ const KEYWORD_RULES = [
   { intent: 'financeiro', pattern: /\bfinanc\w*\b|\bpreços?\b|.../i },
 ];
 
-3. Permissões por role (Layer 2, pós-Haiku) estão em permissionService.js:
+3. Permissões por role (Layer 2, pós-classificação de intenção) estão em permissionService.js:
 const ROLE_PERMISSIONS = {
   admin:    new Set(['view_empreendimentos', 'view_unidades', 'view_reservas', 'view_clientes', 'view_financeiro']),
   corretor: new Set(['view_empreendimentos', 'view_unidades']),

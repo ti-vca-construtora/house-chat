@@ -1,12 +1,19 @@
 /**
- * Classifica a intenção da pergunta usando Claude Haiku.
+ * Classifica a intenção da pergunta usando OpenAI.
  * Não requer atualização de regex ao adicionar novas tabelas —
  * basta atualizar o CLASSIFIER_SYSTEM e fetchContextData.
  */
 
-const Anthropic = require('@anthropic-ai/sdk');
+const OpenAI = require('openai');
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+if (!OPENAI_API_KEY) {
+  throw new Error('OPENAI_API_KEY e obrigatorio');
+}
+
+const client = new OpenAI({ apiKey: OPENAI_API_KEY });
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.2';
+const OPENAI_MODEL_FALLBACK = process.env.OPENAI_MODEL_FALLBACK || 'gpt-5';
 
 // Mapeamento estático intent → permissões. Atualize aqui ao adicionar novos intents.
 const INTENT_PERMISSIONS = {
@@ -109,12 +116,15 @@ const CLASSIFIER_SYSTEM = `Você é um classificador de intenções para um sist
   - "titular": nome do comprador/titular, se mencionado
   - "estado": sigla do estado brasileiro se mencionado (ex: "Bahia" → "BA", "São Paulo" → "SP", "Minas Gerais" → "MG")
   - "cidade": nome da cidade se mencionada
+  - "tipologia": tipologia ou característica da unidade mencionada (ex: "2 quartos com suíte", "3 quartos", "lote")
+  - "pavimento": pavimento mencionado (ex: "térreo", "primeiro andar")
 
 Responda APENAS com JSON válido, sem markdown, sem texto extra.
 
 Exemplos:
 - "quantos distratos tem o CAMPUS VIVANT?" → {"intents":["distratos"],"entities":{"empreendimento":"CAMPUS VIVANT"}}
 - "unidades do Uni Ville por situação" → {"intents":["estoque"],"entities":{"empreendimento":"Uni Ville"}}
+- "unidade no Uni Ville de 2 quartos com suíte no térreo" → {"intents":["estoque"],"entities":{"empreendimento":"Uni Ville","tipologia":"2 quartos com suíte","pavimento":"térreo","situacao":"Disponível"}}
 - "quais empreendimentos existem?" → {"intents":["empreendimentos"],"entities":{}}
 - "total de vendas VCA" → {"intents":["reservas"],"entities":{}}
 - "qual o endereço e quantas unidades disponíveis do Heleusa?" → {"intents":["empreendimentos","estoque"],"entities":{"empreendimento":"Heleusa"}}
@@ -122,21 +132,182 @@ Exemplos:
 - "unidade mais barata na Bahia" → {"intents":["tabela_preco"],"entities":{"estado":"BA"}}
 - "tabela de preço dos empreendimentos em Salvador" → {"intents":["tabela_preco"],"entities":{"cidade":"Salvador"}}`;
 
+const CLASSIFIER_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    intents: {
+      type: 'array',
+      items: {
+        type: 'string',
+        enum: ['reservas', 'clientes', 'empreendimentos', 'estoque', 'distratos', 'financeiro', 'tabela_preco', 'geral'],
+      },
+    },
+    entities: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        empreendimento: { type: ['string', 'null'] },
+        situacao: { type: ['string', 'null'] },
+        corretor: { type: ['string', 'null'] },
+        titular: { type: ['string', 'null'] },
+        estado: { type: ['string', 'null'] },
+        cidade: { type: ['string', 'null'] },
+        tipologia: { type: ['string', 'null'] },
+        pavimento: { type: ['string', 'null'] },
+        bloco: { type: ['string', 'null'] },
+        unidade: { type: ['string', 'null'] },
+        base: { type: ['string', 'null'], enum: ['vca', 'lotear', null] },
+        limit: { type: ['integer', 'null'] },
+        tipologia_terms: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+      },
+      required: [
+        'empreendimento',
+        'situacao',
+        'corretor',
+        'titular',
+        'estado',
+        'cidade',
+        'tipologia',
+        'pavimento',
+        'bloco',
+        'unidade',
+        'base',
+        'limit',
+        'tipologia_terms',
+      ],
+    },
+  },
+  required: ['intents', 'entities'],
+};
+
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function enrichEntitiesFromMessage(message, entities = {}) {
+  const enriched = { ...entities };
+  const normalized = normalizeText(message);
+  const tipologiaTerms = new Set(Array.isArray(enriched.tipologia_terms) ? enriched.tipologia_terms : []);
+
+  if (!enriched.empreendimento) {
+    const empreendimentoMatch = normalized.match(/\b(?:no|na|do|da|dos|das)\s+([a-z0-9\s]+?)(?=\s+(?:na|no|da|do)\s+tipologia|\s+(?:de|com)\s+\d|\s+que\b|\s+disponivel\b|\s+mais\b|\?|$)/);
+    if (empreendimentoMatch?.[1]) {
+      enriched.empreendimento = empreendimentoMatch[1]
+        .trim()
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+    }
+  }
+
+  if (!enriched.empreendimento && normalized.includes('uni ville')) {
+    enriched.empreendimento = 'Uni Ville';
+  }
+
+  const quartosMatch = normalized.match(/\b([1-5])\s*(?:quartos?|dormitorios?|dorms?)\b/);
+  if (quartosMatch) {
+    tipologiaTerms.add(`${quartosMatch[1]} quarto`);
+    if (!enriched.tipologia) enriched.tipologia = `${quartosMatch[1]} quartos`;
+  }
+
+  if (/\bsuite\b/.test(normalized)) {
+    tipologiaTerms.add('suite');
+    if (!enriched.tipologia) enriched.tipologia = 'suite';
+  }
+
+  if (/\bterreo\b|\bpavimento\s+terreo\b/.test(normalized)) {
+    tipologiaTerms.add('terreo');
+    enriched.pavimento = enriched.pavimento || 'térreo';
+  }
+
+  if (/\bdisponivel\b|\bdisponiveis\b|\bdisponibilidade\b/.test(normalized) && !enriched.situacao) {
+    enriched.situacao = 'Disponível';
+  }
+
+  if (tipologiaTerms.size > 0) {
+    enriched.tipologia_terms = Array.from(tipologiaTerms);
+  }
+
+  return enriched;
+}
+
+function isModelFallbackError(error) {
+  return error?.status === 400
+    || error?.status === 404
+    || /model|not found|does not exist|unsupported|not available/i.test(error?.message || '');
+}
+
+function getModelPlan() {
+  return [...new Set([OPENAI_MODEL, OPENAI_MODEL_FALLBACK].filter(Boolean))];
+}
+
+function inferIntentsFromMessage(message, parsedIntents = []) {
+  const normalized = normalizeText(message);
+  const intents = new Set(parsedIntents.filter((i) => i in INTENT_PERMISSIONS));
+
+  if (/\bunidades?\b|\bapartamentos?\b|\bapto\b|\bestoque\b|\btipologia\b|\bquartos?\b|\bsuite\b|\bterreo\b/.test(normalized)) {
+    intents.add('estoque');
+  }
+
+  if (/\bbarat[ao]\b|\bmenor\s+preco\b|\bprecos?\b|\bvalor(?:es)?\b|\btabela\b/.test(normalized)) {
+    intents.add('tabela_preco');
+  }
+
+  if (intents.size === 0) {
+    intents.add('geral');
+  }
+
+  return Array.from(intents);
+}
+
+async function classifyWithModel(message, model) {
+  const response = await client.responses.create({
+    model,
+    instructions: CLASSIFIER_SYSTEM,
+    input: message,
+    max_output_tokens: 1600,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'intent_classification',
+        strict: true,
+        schema: CLASSIFIER_SCHEMA,
+      },
+    },
+  });
+
+  const raw = response.output_text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  return JSON.parse(raw);
+}
+
 async function classifyMessage(message) {
   try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 200,
-      system: CLASSIFIER_SYSTEM,
-      messages: [{ role: 'user', content: message }],
-    });
+    let parsed;
+    let lastError;
+    for (const model of getModelPlan()) {
+      try {
+        parsed = await classifyWithModel(message, model);
+        break;
+      } catch (error) {
+        lastError = error;
+        if (isModelFallbackError(error) && model !== OPENAI_MODEL_FALLBACK) {
+          console.warn(`[IntentMapper] modelo ${model} indisponivel. Tentando fallback ${OPENAI_MODEL_FALLBACK}.`);
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (!parsed) throw lastError;
 
-    const raw = response.content[0].text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const parsed = JSON.parse(raw);
-
-    const intents = Array.isArray(parsed.intents) && parsed.intents.length > 0
-      ? parsed.intents.filter((i) => i in INTENT_PERMISSIONS)
-      : ['geral'];
+    const intents = inferIntentsFromMessage(
+      message,
+      Array.isArray(parsed.intents) && parsed.intents.length > 0 ? parsed.intents : []
+    );
 
     const entities = (parsed.entities && typeof parsed.entities === 'object')
       ? parsed.entities
@@ -151,15 +322,21 @@ async function classifyMessage(message) {
       intents,
       intent: intents[0],
       permissions: Array.from(permissions),
-      entities,
+      entities: enrichEntitiesFromMessage(message, entities),
     };
   } catch (err) {
     console.warn('[IntentMapper] Falha na classificação, usando fallback geral:', err.message);
+    const intents = inferIntentsFromMessage(message, []);
+    const permissions = new Set();
+    for (const intent of intents) {
+      (INTENT_PERMISSIONS[intent] || INTENT_PERMISSIONS.geral).forEach((p) => permissions.add(p));
+    }
+
     return {
-      intents: ['geral'],
-      intent: 'geral',
-      permissions: ['view_empreendimentos'],
-      entities: {},
+      intents,
+      intent: intents[0],
+      permissions: Array.from(permissions),
+      entities: enrichEntitiesFromMessage(message, {}),
     };
   }
 }

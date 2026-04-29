@@ -1,7 +1,8 @@
 const { classifyMessage, quickRoleCheck, getBlockedMessage, RESTRICTED_INTENTS_FOR_CORRETOR } = require('../ai/intentMapper');
 const permissionService = require('../services/permissionService');
 const supabaseService = require('../services/supabaseService');
-const claudeService = require('../services/claudeService');
+const openAIService = require('../services/openAIService');
+const { buildQueryPlan } = require('../services/queryPlanner');
 
 async function sendMessage(req, res, next) {
   try {
@@ -30,12 +31,16 @@ async function sendMessage(req, res, next) {
       }
     }
 
-    // 1. Classificar intenção da pergunta via Claude Haiku
+    // 1. Classificar intenção da pergunta via OpenAI
     const { intents, intent, permissions, entities } = await classifyMessage(trimmed);
+    const queryPlan = await buildQueryPlan({ message: trimmed, userRole, intents, entities });
+    const requiredPermissions = queryPlan.requiredPermissions.length > 0
+      ? queryPlan.requiredPermissions
+      : permissions;
 
     // ── Layer 2: verificação pós-classificação por intent ────────────────────
     if (userRole !== 'admin') {
-      const hasPerms = await permissionService.hasPermissions(userRole, permissions);
+      const hasPerms = await permissionService.hasPermissions(userRole, requiredPermissions);
       if (!hasPerms) {
         const blockedIntent = intents.find((i) => RESTRICTED_INTENTS_FOR_CORRETOR.has(i)) || intents[0];
         const errorMsg = getBlockedMessage(blockedIntent);
@@ -64,14 +69,18 @@ async function sendMessage(req, res, next) {
     await supabaseService.saveMessage(convId, 'user', trimmed);
 
     // 5. Buscar dados do banco baseado nos intents identificados
-    const contextData = await supabaseService.fetchContextData(intents, entities);
+    const contextData = await supabaseService.fetchContextData(intents, entities, {
+      message: trimmed,
+      userRole,
+      queryPlan,
+    });
 
     // 6. Pegar histórico recente da conversa (últimas 10 mensagens)
     const history = await supabaseService.getMessages(convId, userId);
     const recentHistory = history.slice(-10);
 
-    // 7. Enviar para Claude com contexto dos dados e role do usuário
-    const aiResponse = await claudeService.chat(trimmed, contextData, recentHistory, userRole);
+    // 7. Enviar para OpenAI com contexto dos dados e role do usuário
+    const aiResponse = await openAIService.chat(trimmed, contextData, recentHistory, userRole);
 
     // 8. Salvar resposta da IA
     await supabaseService.saveMessage(convId, 'assistant', aiResponse);

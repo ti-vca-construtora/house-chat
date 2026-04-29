@@ -43,11 +43,15 @@ function getScopeLabel(scope: SyncScope | string | null | undefined) {
     case 'table:estoque_cvcrm': return 'Estoque VCA';
     case 'table:distratos_cvcrm': return 'Distratos VCA';
     case 'table:tabela_de_preco_cvcrm': return 'Tabela de Preços VCA';
+    case 'table:TB_HIST_LEADS': return 'Histórico de Leads';
+    case 'table:TB_LEADS': return 'Leads';
+    case 'table:TB_PRECADASTROS': return 'Pré-cadastros VCA';
     case 'table:empreendimentos_lotear': return 'Empreendimentos LOTEAR';
     case 'table:vendas_lotear': return 'Vendas LOTEAR';
     case 'table:estoque_lotear': return 'Estoque LOTEAR';
     case 'table:distratos_lotear': return 'Distratos LOTEAR';
     case 'table:tabela_de_preco_lotear': return 'Tabela de Preços LOTEAR';
+    case 'table:TB_PRECADASTROS_LOT': return 'Pré-cadastros LOTEAR';
     default: return 'Banco de Dados';
   }
 }
@@ -73,7 +77,9 @@ const TABLE_ROWS = [
 
 const ORDERED_TABLE_KEYS: SyncTableKey[] = [
   'empreendimentos_cvcrm', 'vendas_cvcrm', 'estoque_cvcrm', 'distratos_cvcrm', 'tabela_de_preco_cvcrm',
+  'TB_HIST_LEADS', 'TB_LEADS', 'TB_PRECADASTROS',
   'empreendimentos_lotear', 'vendas_lotear', 'estoque_lotear', 'distratos_lotear', 'tabela_de_preco_lotear',
+  'TB_PRECADASTROS_LOT',
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -210,8 +216,8 @@ export default function SyncDatabaseModal({
               {!showProgress && !error && (
                 <p className="mt-3 text-xs text-dark-500 bg-dark-950 border border-dark-800 rounded-lg px-3 py-2">
                   {selectedMode === 'total'
-                    ? 'Modo Total  percorre todas as paginas disponiveis na API para cada tabela.'
-                    : 'Modo Parcial  sincroniza apenas as 5 ultimas paginas de vendas e todos os empreendimentos.'}
+                    ? 'Modo Total consulta o BigQuery e atualiza todas as tabelas do escopo selecionado.'
+                    : 'Modo Parcial usa o mesmo fluxo BigQuery; mantenha Total para cargas completas.'}
                 </p>
               )}
             </div>
@@ -228,7 +234,7 @@ export default function SyncDatabaseModal({
                     className="w-full flex items-center justify-center gap-2 rounded-xl border border-brand-500/40 bg-brand-600/10 hover:bg-brand-600/20 text-brand-300 font-semibold py-3 text-sm transition-colors"
                   >
                     <RefreshCw size={15} />
-                    Sincronizar todas as tabelas  VCA + LOTEAR
+                    Sincronizar todas as tabelas  BigQuery
                   </button>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -236,7 +242,7 @@ export default function SyncDatabaseModal({
                     <div className="rounded-xl border border-dark-800 bg-dark-950 overflow-hidden">
                       <div className="px-4 py-3 border-b border-dark-800 flex items-center justify-between">
                         <span className="text-sm font-bold text-dark-100">Base VCA</span>
-                        <span className="text-xs text-dark-500 bg-dark-800 px-2 py-0.5 rounded-full">vca.cvcrm.com.br</span>
+                        <span className="text-xs text-dark-500 bg-dark-800 px-2 py-0.5 rounded-full">BigQuery VCA</span>
                       </div>
                       <div className="divide-y divide-dark-800/60">
                         {TABLE_ROWS.map(({ label, Icon, scopeVca }) => (
@@ -262,7 +268,7 @@ export default function SyncDatabaseModal({
                     <div className="rounded-xl border border-dark-800 bg-dark-950 overflow-hidden">
                       <div className="px-4 py-3 border-b border-dark-800 flex items-center justify-between">
                         <span className="text-sm font-bold text-dark-100">Base LOTEAR</span>
-                        <span className="text-xs text-dark-500 bg-dark-800 px-2 py-0.5 rounded-full">vcalotear.cvcrm.com.br</span>
+                        <span className="text-xs text-dark-500 bg-dark-800 px-2 py-0.5 rounded-full">BigQuery LOTEAR</span>
                       </div>
                       <div className="divide-y divide-dark-800/60">
                         {TABLE_ROWS.map(({ label, Icon, scopeLotear }) => (

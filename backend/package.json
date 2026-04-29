@@ -1,14 +1,15 @@
 {
   "name": "house-chat-backend",
   "version": "1.0.0",
-  "description": "Backend do Jardas Bot - Assistente Imobiliário com IA",
+  "description": "Backend do House Bot - Assistente Imobiliário com IA",
   "main": "src/index.js",
   "scripts": {
     "dev": "nodemon src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node test/queryPlanner.test.js && node test/queryPlanValidator.test.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "openai": "^6.9.1",
     "@supabase/supabase-js": "^2.49.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

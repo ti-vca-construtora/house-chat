@@ -27,5 +27,5 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`[Jardas Bot] Backend rodando na porta ${PORT}`);
+  console.log(`[HouseChat] Backend rodando na porta ${PORT}`);
 });

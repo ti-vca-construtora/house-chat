@@ -1,4 +1,6 @@
 const supabase = require('../database/supabase');
+const { buildQueryPlan } = require('./queryPlanner');
+const { executePlan } = require('./queryExecutors');
 
 function applyReservaFilters(query, filters = {}) {
   let nextQuery = query;
@@ -227,7 +229,61 @@ async function fetchVendasAgregadoPorBase() {
   };
 }
 
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function matchesTextTerms(value, terms = []) {
+  const normalizedValue = normalizeText(value);
+  return terms.every((term) => {
+    const normalizedTerm = normalizeText(term);
+    if (normalizedTerm === 'suite') {
+      return normalizedValue.includes('suite') && !/\bsem\s+suite\b/.test(normalizedValue);
+    }
+    return normalizedValue.includes(normalizedTerm);
+  });
+}
+
+function getTipologiaTerms(filters = {}) {
+  const terms = [];
+
+  if (filters.tipologia) {
+    const normalizedTipologia = normalizeText(filters.tipologia);
+    const quartosMatch = normalizedTipologia.match(/\b([1-5])\s*(?:quartos?|dormitorios?|dorms?)\b/);
+    if (quartosMatch) terms.push(`${quartosMatch[1]} quarto`);
+    if (/\bsuite\b/.test(normalizedTipologia)) terms.push('suite');
+    if (/\bterreo\b/.test(normalizedTipologia)) terms.push('terreo');
+    if (!quartosMatch && !/\bsuite\b|\bterreo\b/.test(normalizedTipologia)) {
+      terms.push(filters.tipologia);
+    }
+  }
+  if (filters.pavimento) {
+    terms.push(filters.pavimento);
+  }
+  if (Array.isArray(filters.tipologia_terms)) {
+    terms.push(...filters.tipologia_terms);
+  }
+
+  return [...new Set(terms.filter(Boolean))];
+}
+
+function normalizeUnitKey(row) {
+  return [
+    normalizeText(row.empreendimento || row.nome_empreendimento),
+    normalizeText(row.bloco),
+    normalizeText(row.unidade),
+  ].join('|');
+}
+
 async function fetchEstoqueAgregado(filters = {}) {
+  const tipologiaTerms = getTipologiaTerms(filters);
+  const shouldReturnUnitDetails = Boolean(
+    filters.empreendimento || filters.tipologia || filters.pavimento || tipologiaTerms.length > 0
+  );
+
   async function fetchEstoqueAll(tableName) {
     const PAGE_SIZE = 1000;
     let from = 0;
@@ -236,7 +292,7 @@ async function fetchEstoqueAgregado(filters = {}) {
     while (true) {
       let q = supabase
         .from(tableName)
-        .select('empreendimento:nome_empreendimento, situacao, tipologia, area_privativa, vagas_garagem, bloco, unidade, situacao_mapa_disponibilidade')
+        .select('idunidade, empreendimento:nome_empreendimento, situacao, tipologia, area_privativa, vagas_garagem, bloco, unidade, situacao_mapa_disponibilidade')
         .range(from, from + PAGE_SIZE - 1);
       if (filters.empreendimento) q = q.ilike('nome_empreendimento', `%${filters.empreendimento}%`);
       if (filters.situacao) q = q.ilike('situacao', `%${filters.situacao}%`);
@@ -252,13 +308,38 @@ async function fetchEstoqueAgregado(filters = {}) {
       from += PAGE_SIZE;
     }
 
-    return allData;
+    return tipologiaTerms.length > 0
+      ? allData.filter((row) => matchesTextTerms(row.tipologia, tipologiaTerms))
+      : allData;
   }
 
   const [vcaData, lotearData] = await Promise.all([
     fetchEstoqueAll('estoque_cvcrm'),
     fetchEstoqueAll('estoque_lotear'),
   ]);
+
+  function buildUnitDetails(rows) {
+    return rows
+      .sort((a, b) => {
+        const empCompare = String(a.empreendimento || '').localeCompare(String(b.empreendimento || ''));
+        if (empCompare !== 0) return empCompare;
+        const blocoCompare = String(a.bloco || '').localeCompare(String(b.bloco || ''));
+        if (blocoCompare !== 0) return blocoCompare;
+        return String(a.unidade || '').localeCompare(String(b.unidade || ''));
+      })
+      .slice(0, 50)
+      .map((row) => ({
+        idunidade: row.idunidade,
+        empreendimento: row.empreendimento,
+        bloco: row.bloco,
+        unidade: row.unidade,
+        situacao: row.situacao,
+        tipologia: row.tipologia,
+        area_privativa: row.area_privativa,
+        vagas_garagem: row.vagas_garagem,
+        situacao_mapa_disponibilidade: row.situacao_mapa_disponibilidade,
+      }));
+  }
 
   function agregar(rows) {
     const porEmp = {};
@@ -273,6 +354,14 @@ async function fetchEstoqueAgregado(filters = {}) {
     return {
       total: rows.length,
       por_situacao: porSituacao,
+      filtros_aplicados: {
+        empreendimento: filters.empreendimento || null,
+        situacao: filters.situacao || null,
+        tipologia: filters.tipologia || null,
+        pavimento: filters.pavimento || null,
+        termos_tipologia: tipologiaTerms,
+      },
+      unidades_encontradas: shouldReturnUnitDetails ? buildUnitDetails(rows) : undefined,
       por_empreendimento: Object.entries(porEmp)
         .sort((a, b) => Object.values(b[1]).reduce((s, v) => s + v, 0) - Object.values(a[1]).reduce((s, v) => s + v, 0))
         .map(([empreendimento, situacoes]) => ({ empreendimento, situacoes })),
@@ -282,6 +371,104 @@ async function fetchEstoqueAgregado(filters = {}) {
   return {
     vca: { descricao: 'Base VCA (CVCRM)', ...agregar(vcaData) },
     lotear: { descricao: 'Base LOTEAR', ...agregar(lotearData) },
+  };
+}
+
+async function fetchUnidadesComPrecoPorTipologia(filters = {}) {
+  const tipologiaTerms = getTipologiaTerms(filters);
+  if (!filters.empreendimento || tipologiaTerms.length === 0) {
+    return null;
+  }
+
+  const estoque = await fetchEstoqueAgregado(filters);
+  const unidadesEstoque = [
+    ...(estoque.vca.unidades_encontradas || []).map((row) => ({ ...row, base: 'vca' })),
+    ...(estoque.lotear.unidades_encontradas || []).map((row) => ({ ...row, base: 'lotear' })),
+  ];
+
+  if (unidadesEstoque.length === 0) {
+    return {
+      filtros_aplicados: {
+        empreendimento: filters.empreendimento,
+        situacao: filters.situacao || null,
+        tipologia: filters.tipologia || null,
+        pavimento: filters.pavimento || null,
+        termos_tipologia: tipologiaTerms,
+      },
+      total_unidades_estoque: 0,
+      total_unidades_com_preco: 0,
+      unidade_mais_barata: null,
+      unidades: [],
+    };
+  }
+
+  async function fetchPrecos(tableName) {
+    const PAGE_SIZE = 1000;
+    let from = 0;
+    let allData = [];
+
+    while (true) {
+      let q = supabase
+        .from(tableName)
+        .select('idunidade, empreendimento, bloco, unidade, area_privativa, valor_total, tabela')
+        .range(from, from + PAGE_SIZE - 1);
+
+      q = q.ilike('empreendimento', `%${filters.empreendimento}%`);
+
+      const { data, error } = await q;
+      if (error) throw new Error(`Erro ao buscar precos para cruzamento ${tableName}: ${error.message}`);
+      allData = allData.concat(data || []);
+      if ((data || []).length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+
+    return allData;
+  }
+
+  const [precosVca, precosLotear] = await Promise.all([
+    fetchPrecos('tabela_de_preco_cvcrm'),
+    fetchPrecos('tabela_de_preco_lotear'),
+  ]);
+
+  const priceById = new Map();
+  const priceByKey = new Map();
+  for (const row of [...precosVca, ...precosLotear]) {
+    if (row.idunidade != null) priceById.set(String(row.idunidade), row);
+    priceByKey.set(normalizeUnitKey(row), row);
+  }
+
+  const unidades = unidadesEstoque
+    .map((row) => {
+      const preco = row.idunidade != null
+        ? priceById.get(String(row.idunidade)) || priceByKey.get(normalizeUnitKey(row))
+        : priceByKey.get(normalizeUnitKey(row));
+
+      return {
+        empreendimento: row.empreendimento,
+        bloco: row.bloco,
+        unidade: row.unidade,
+        situacao: row.situacao,
+        tipologia: row.tipologia,
+        area_privativa: preco?.area_privativa ?? row.area_privativa,
+        valor_total: preco?.valor_total ?? null,
+        tabela: preco?.tabela ?? null,
+      };
+    })
+    .filter((row) => row.valor_total != null && row.valor_total > 0)
+    .sort((a, b) => a.valor_total - b.valor_total);
+
+  return {
+    filtros_aplicados: {
+      empreendimento: filters.empreendimento,
+      situacao: filters.situacao || null,
+      tipologia: filters.tipologia || null,
+      pavimento: filters.pavimento || null,
+      termos_tipologia: tipologiaTerms,
+    },
+    total_unidades_estoque: unidadesEstoque.length,
+    total_unidades_com_preco: unidades.length,
+    unidade_mais_barata: unidades[0] || null,
+    unidades: unidades.slice(0, 20),
   };
 }
 
@@ -454,7 +641,18 @@ async function fetchTabelaPrecoAgregado(filters = {}) {
   };
 }
 
-async function fetchContextData(intents, entities) {
+async function fetchContextData(intents, entities, options = {}) {
+  const queryPlan = options.queryPlan || await buildQueryPlan({
+    message: options.message || '',
+    userRole: options.userRole,
+    intents,
+    entities,
+  });
+
+  return executePlan(queryPlan);
+}
+
+async function fetchLegacyContextData(intents, entities) {
   const intentList = Array.isArray(intents) ? intents : [intents];
   const context = {};
 
@@ -474,6 +672,13 @@ async function fetchContextData(intents, entities) {
 
   if (has('estoque') && !context.estoque) {
     context.estoque = await fetchEstoqueAgregado(entities);
+  }
+
+  if (has('estoque') && has('tabela_preco')) {
+    const unidadesComPreco = await fetchUnidadesComPrecoPorTipologia(entities);
+    if (unidadesComPreco) {
+      context.unidades_com_preco_filtradas = unidadesComPreco;
+    }
   }
 
   if (has('distratos')) {

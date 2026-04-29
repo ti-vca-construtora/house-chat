@@ -161,7 +161,8 @@ INSERT INTO public.permissions (name, description) VALUES
   ('view_unidades', 'Ver dados de unidades'),
   ('view_reservas', 'Ver dados de reservas'),
   ('view_clientes', 'Ver dados de clientes'),
-  ('view_financeiro', 'Ver dados financeiros')
+  ('view_financeiro', 'Ver dados financeiros'),
+  ('view_tabela_preco', 'Ver tabela de preco de unidades')
 ON CONFLICT (name) DO NOTHING;
 
 -- Admin tem todas as permissões
@@ -171,7 +172,7 @@ ON CONFLICT (role, permission_id) DO NOTHING;
 
 -- Corretor tem apenas empreendimentos e unidades
 INSERT INTO public.role_permissions (role, permission_id)
-SELECT 'corretor', id FROM public.permissions WHERE name IN ('view_empreendimentos', 'view_unidades')
+SELECT 'corretor', id FROM public.permissions WHERE name IN ('view_empreendimentos', 'view_unidades', 'view_tabela_preco')
 ON CONFLICT (role, permission_id) DO NOTHING;
 
 -- ============================================

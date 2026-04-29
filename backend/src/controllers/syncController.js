@@ -1,9 +1,9 @@
-const cvcrmService = require('../services/cvcrmService');
+const bigQuerySyncService = require('../services/bigQuerySyncService');
 const syncJobService = require('../services/syncJobService');
 
 async function syncEmpreendimentos(req, res, next) {
   try {
-    const result = await cvcrmService.syncEmpreendimentos(cvcrmService.DATA_SOURCES[0]);
+    const result = await bigQuerySyncService.syncScoped('table:empreendimentos_cvcrm', 'total');
     res.json({ success: true, ...result });
   } catch (err) {
     next(err);
@@ -13,7 +13,7 @@ async function syncEmpreendimentos(req, res, next) {
 async function syncVendas(req, res, next) {
   try {
     const mode = req.body?.mode === 'partial' ? 'partial' : 'total';
-    const result = await cvcrmService.syncVendas(cvcrmService.DATA_SOURCES[0], mode);
+    const result = await bigQuerySyncService.syncScoped('table:vendas_cvcrm', mode);
     res.json({ success: true, ...result });
   } catch (err) {
     next(err);
@@ -25,14 +25,14 @@ async function startSyncAll(req, res, next) {
     const mode = req.body?.mode === 'partial' ? 'partial' : 'total';
     const scope = req.body?.scope || 'all';
 
-    const plan = cvcrmService.getScopedPlan(scope);
-    const tableDefs = cvcrmService.getPlanTableDefinitions(plan);
+    const plan = bigQuerySyncService.getPlan(scope);
+    const tableDefs = bigQuerySyncService.getPlanTableDefinitions(plan);
     const job = syncJobService.createJob(mode, scope, tableDefs);
 
     res.status(202).json({ success: true, jobId: job.id, job });
 
     syncJobService.runJob(job.id, async (reportProgress) => {
-      return cvcrmService.syncScoped(scope, mode, reportProgress);
+      return bigQuerySyncService.syncScoped(scope, mode, reportProgress);
     });
   } catch (err) {
     next(err);

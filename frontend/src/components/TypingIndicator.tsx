@@ -8,7 +8,7 @@ export default function TypingIndicator() {
   return (
     <div className="flex gap-3">
       <div className="w-8 h-8 rounded-full bg-[#67c900] flex items-center justify-center flex-shrink-0 overflow-hidden">
-        <Image src={houseImg} alt="Jardas Bot" width={32} height={32} className="w-full h-full object-cover" />
+        <Image src={houseImg} alt="House Bot" width={32} height={32} className="w-full h-full object-cover" />
       </div>
       <div className="bg-dark-800 border border-dark-700 rounded-2xl rounded-bl-md px-4 py-3">
         <div className="flex gap-1.5 items-center h-5">

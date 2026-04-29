@@ -44,7 +44,7 @@ export default function ChatWindow({ messages, sending, onSend }: ChatWindowProp
                     <FileText size={24} strokeWidth={1.5} />
                  </div>
                  <div className="w-14 h-14 rounded-2xl bg-[#67c900] flex items-center justify-center shadow-xl shadow-black/10 overflow-hidden">
-                    <Image src={houseImg} alt="Jardas Bot" width={56} height={56} className="w-full h-full object-cover" />
+                    <Image src={houseImg} alt="House Bot" width={56} height={56} className="w-full h-full object-cover" />
                  </div>
                  <div className="w-12 h-12 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-400 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
                     <CheckCircle2 size={24} strokeWidth={1.5} />

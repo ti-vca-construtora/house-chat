@@ -41,7 +41,11 @@ export type SyncScope =
   | 'table:vendas_lotear'
   | 'table:estoque_lotear'
   | 'table:distratos_lotear'
-  | 'table:tabela_de_preco_lotear';
+  | 'table:tabela_de_preco_lotear'
+  | 'table:TB_HIST_LEADS'
+  | 'table:TB_LEADS'
+  | 'table:TB_PRECADASTROS'
+  | 'table:TB_PRECADASTROS_LOT';
 export type SyncTableKey =
   | 'empreendimentos_cvcrm'
   | 'vendas_cvcrm'
@@ -52,7 +56,11 @@ export type SyncTableKey =
   | 'vendas_lotear'
   | 'estoque_lotear'
   | 'distratos_lotear'
-  | 'tabela_de_preco_lotear';
+  | 'tabela_de_preco_lotear'
+  | 'TB_HIST_LEADS'
+  | 'TB_LEADS'
+  | 'TB_PRECADASTROS'
+  | 'TB_PRECADASTROS_LOT';
 
 export interface SyncTableProgress {
   label: string;
