@@ -19,12 +19,26 @@ Regras:
 - Por enquanto o Supabase tem somente a tabela vw_Vendas_Consolidada para dados comerciais. Nunca use tabelas antigas como estoque_cvcrm, estoque_lotear, vendas_cvcrm, vendas_lotear, distratos_cvcrm, distratos_lotear, tabela_de_preco_cvcrm, tabela_de_preco_lotear, TB_LEADS ou TB_PRECADASTROS.
 - Prefira planos deterministicos quando existirem: sales_by_project e cancellations_by_project. Use semantic_aggregate somente sobre vw_Vendas_Consolidada.
 - Para qualquer pergunta sobre vendas, compras, reservas, contratos, unidades compradas/vendidas, compradores, clientes compradores, corretores, imobiliarias, Fonte/base, tabela comercial ou VGV, use a tabela vw_Vendas_Consolidada.
+- Pode combinar livremente multiplos filtros na mesma consulta quando a pergunta ou o historico indicarem escopo: empreendimento, bloco, unidade, etapa, Fonte/base, cliente, corretor, imobiliaria, nomeTabelaAjustado, cidade, dataVenda e Status.
+- A coluna cliente esta disponivel para admins e deve ser usada para nomes de compradores/clientes que compraram.
 - Para vendas ativas, adicione filtro Status != INATIVO, exceto quando o usuario pedir historico geral incluindo canceladas/distratadas.
 - Para distratos, cancelamentos, rescisoes ou inativos, use a tabela vw_Vendas_Consolidada e filtro Status = INATIVO.
 - Motivo de distrato/cancelamento fica em distrato_motivoDistrato.
+- Data do distrato/cancelamento fica em distrato_dataCad.
+- Quem vendeu a unidade deve usar corretor junto com imobiliaria.
+- Estado civil fica em estadoCivil.
+- Renda fica em renda; o executor avisara que esse dado pode ter distorcoes pelo preenchimento do CVCRM.
+- Tipo de venda fica em tipoVenda.
+- Periodo/data da venda deve filtrar dataVenda.
+- Cliente/comprador fica em cliente.
+- Tambem sao consultaveis empreendimento, etapa, bloco, unidade, cidade, Fonte/base, Status, sexo, idade, midia, nomeTabelaAjustado, valorContrato e VALOR_ENTRADA.
 - Tabela comercial da venda fica em nomeTabelaAjustado.
 - Base da venda fica em Fonte.
 - VGV deve usar sempre Valor_VGV_Correto.
+- Se a pergunta de VGV nao disser se deve considerar unidades distratadas/canceladas, o padrao e somente vendas ativas com Status != INATIVO.
+- Se o usuario pedir VGV dos distratos/cancelamentos, use Status = INATIVO. Se pedir incluindo distratadas/canceladas ou historico completo, nao adicione filtro de Status.
+- Se a pergunta for follow-up sobre "desses distratos", "esses 65", "desse empreendimento" ou escopo parecido, preserve filtros ja presentes no plano deterministico, trocando apenas a metrica/dimensao solicitada.
+- Nao peca autorizacao: se o plano pode consultar a coluna na vw_Vendas_Consolidada, gere o plano com os filtros necessarios.
 - Quando a pergunta pedir ranking, agrupamento, media, minimo, maximo, soma ou contagem que nao tenha plano fixo obvio, use semantic_aggregate.
 - Para ranking de empreendimentos mais baratos, semantic_aggregate deve agrupar por empreendimento e usar min(valor_total), excluindo termos como garagem, extra, vaga e baia quando a pergunta buscar produto principal.
 - Nunca planeje acoes operacionais como bloquear, reservar, simular financiamento, aprovar credito, acionar corretor ou enviar proposta; use action_not_supported.

@@ -28,8 +28,9 @@ const BUSINESS_CATALOG = {
       tables: ['vw_Vendas_Consolidada'],
       fields: [
         'referencia', 'dataVenda', 'cliente', 'empreendimento', 'etapa', 'bloco', 'unidade',
-        'cidade', 'corretor', 'imobiliaria', 'estadoCivil', 'sexo', 'renda',
-        'nomeTabelaAjustado', 'Fonte', 'Status', 'Valor_VGV_Correto',
+        'cidade', 'corretor', 'imobiliaria', 'estadoCivil', 'sexo', 'idade', 'renda',
+        'tipoVenda', 'midia', 'nomeTabelaAjustado', 'valorContrato', 'VALOR_ENTRADA',
+        'Fonte', 'Status', 'Valor_VGV_Correto',
       ],
     },
     distratos: {
@@ -41,8 +42,8 @@ const BUSINESS_CATALOG = {
       tables: ['vw_Vendas_Consolidada'],
       fields: [
         'referencia', 'dataVenda', 'cliente', 'empreendimento', 'etapa', 'bloco', 'unidade',
-        'corretor', 'imobiliaria', 'Fonte', 'Status', 'distrato_motivoDistrato',
-        'Valor_VGV_Correto',
+        'corretor', 'imobiliaria', 'Fonte', 'Status', 'distrato_dataCad',
+        'distrato_situacaoData', 'distrato_motivoDistrato', 'Valor_VGV_Correto',
       ],
     },
     leads: {

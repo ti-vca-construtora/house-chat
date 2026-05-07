@@ -113,9 +113,13 @@ function canonicalProjectName(value) {
 }
 
 function cleanProjectCandidate(candidate) {
-  const cleaned = String(candidate || '').trim().replace(/[?.:,;]+$/, '');
+  const cleaned = String(candidate || '')
+    .replace(/\bcom\s+unidades?\s+(?:distratadas?|canceladas?).*$/i, '')
+    .replace(/\b(?:atualmente|hoje|agora)\b.*$/i, '')
+    .trim()
+    .replace(/[?.:,;]+$/, '');
   if (!cleaned) return null;
-  if (/^(?:base|fonte|vca|cvcrm|lotear|bloco|bl|torre|unidade|apto|apartamento)\b/i.test(cleaned)) return null;
+  if (/^(?:base|fonte|vca|cvcrm|lotear|bloco|bl|torre|unidade|apto|apartamento|vgv)\b/i.test(cleaned)) return null;
   return canonicalProjectName(cleaned);
 }
 
@@ -147,12 +151,22 @@ function sanitizeEntitiesForPlanning(message, entities = {}) {
 
 function extractConversationContext(conversationHistory = []) {
   let latestBase = null;
+  let latestCancellationScope = false;
+  let latestVgvScope = false;
+  let latestVgvGroupBy = null;
   const history = Array.isArray(conversationHistory) ? [...conversationHistory].reverse() : [];
 
   for (const message of history) {
     const content = message?.content || '';
     if (!content) continue;
 
+    if (!latestCancellationScope && isCancellationContextMessage(content)) latestCancellationScope = true;
+    if (!latestVgvScope && isVgvContextMessage(content)) {
+      latestVgvScope = true;
+      if (hasAny(normalizeText(content), ['empreendimento', 'empreendimentos', 'obra', 'projeto'])) {
+        latestVgvGroupBy = 'empreendimento';
+      }
+    }
     const project = extractProjectFromMessage(content);
     const base = parseBaseFromMessage(content);
     const block = parseBlockFromMessage(content);
@@ -161,21 +175,57 @@ function extractConversationContext(conversationHistory = []) {
         empreendimento: project,
         ...(base ? { base } : {}),
         ...(block ? { bloco: block } : {}),
+        ...(latestCancellationScope ? { cancellationFollowUp: true } : {}),
+        ...(latestVgvScope ? { vgvFollowUp: true } : {}),
+        ...(latestVgvGroupBy ? { vgvGroupBy: latestVgvGroupBy } : {}),
       };
     }
 
     if (!latestBase && base) latestBase = base;
   }
 
-  return latestBase ? { base: latestBase } : {};
+  return {
+    ...(latestBase ? { base: latestBase } : {}),
+    ...(latestCancellationScope ? { cancellationFollowUp: true } : {}),
+    ...(latestVgvScope ? { vgvFollowUp: true } : {}),
+    ...(latestVgvGroupBy ? { vgvGroupBy: latestVgvGroupBy } : {}),
+  };
 }
 
 function shouldInheritConversationScope(message, entities = {}) {
   const normalized = normalizeText(message);
   const hasLocalScope = hasEntity(entities, 'empreendimento') || hasEntity(entities, 'base');
   const isScopedFollowUp = /\bbloco\b|\bbl\b|\btorre\b|\bunidades?\b|\bapto\b|\bapartamentos?\b|\betapa\b/.test(normalized);
-  const isCommercialQuestion = /\bvendas?\b|\bcompras?\b|\bcompraram\b|\bcomprad(?:or|ores|ora|oras)\b|\bclientes?\b|\breservas?\b|\bcontratos?\b|\bdistratos?\b|\bcancelamentos?\b/.test(normalized);
-  return !hasLocalScope && isScopedFollowUp && isCommercialQuestion;
+  const isReferentialFollowUp = /\b(?:ess|dess)(?:e|a|es|as)\b|\bdesse\s+empreendimento\b|\bnesse\s+periodo\b|\bnesse\s+mes\b|\bnessa\s+base\b|\bdos\s+\d+\b/.test(normalized);
+  const isExplanationFollowUp = /\bpor\s+que\b|\bporque\b|\bpor\s+qual\s+motivo\b|\bcomo\s+chegou\b|\bde\s+onde\b|\bexplica\b|\bexplique\b/.test(normalized);
+  const isVgvStatusChoice = isVgvStatusChoiceMessage(message);
+  const isCommercialQuestion = /\bvendas?\b|\bcompras?\b|\bcompraram\b|\bcomprad(?:or|ores|ora|oras)\b|\bclientes?\b|\breservas?\b|\bcontratos?\b|\bdistratos?\b|\bcancelamentos?\b|\bvgv\b|\bvalor\b|\brenda\b|\bmotivos?\b|\bquem\s+vendeu\b|\btipo\s+de\s+venda\b|\bso\b|\bsomente\b|\bapenas\b/.test(normalized);
+  return !hasLocalScope && (((isScopedFollowUp || isReferentialFollowUp || isVgvStatusChoice) && isCommercialQuestion) || isExplanationFollowUp);
+}
+
+function asksBuyerUnitListQuestion(message) {
+  const normalized = normalizeText(message);
+  const asksUnits = /\bunidades?\b|\bapartamentos?\b|\baptos?\b/.test(normalized);
+  const asksBuyers = /\bclientes?\b|\bcomprad(?:or|ores|ora|oras)\b|\bcompraram\b|\btitulares?\b|\bnomes?\b/.test(normalized);
+  return asksUnits && asksBuyers;
+}
+
+function recentHistoryAskedBuyerUnitList(conversationHistory = []) {
+  const history = Array.isArray(conversationHistory) ? [...conversationHistory].reverse() : [];
+  return history.slice(0, 6).some((message) => asksBuyerUnitListQuestion(message?.content || ''));
+}
+
+function isCancellationContextMessage(message) {
+  return /\bdistratos?\b|\bcancelamentos?\b|\bcancelad[ao]s?\b|\brescis(?:ao|oes)\b|\binativ[ao]s?\b/.test(normalizeText(message));
+}
+
+function isVgvContextMessage(message) {
+  return /\bvgv\b|\bvalor\s+financeiro\b|\btotal\s+financeiro\b/.test(normalizeText(message));
+}
+
+function isVgvStatusChoiceMessage(message) {
+  const normalized = normalizeText(message);
+  return /\bativas?\b|\bso\s+ativas?\b|\bsomente\s+ativas?\b|\bapenas\s+ativas?\b|\binclu(?:i|ir|indo)\b|\bdistratadas?\b|\bcanceladas?\b|\bhistoric[ao]\b/.test(normalized);
 }
 
 function enrichEntitiesWithConversationContext(message, entities = {}, conversationHistory = []) {
@@ -183,7 +233,15 @@ function enrichEntitiesWithConversationContext(message, entities = {}, conversat
   const block = parseBlockFromMessage(message);
   if (block && !current.bloco) current.bloco = block;
 
-  if (!shouldInheritConversationScope(message, current)) return current;
+  const currentMentionsCancellation = isCancellationContextMessage(message);
+  const currentIsVgvStatusChoice = isVgvStatusChoiceMessage(message);
+  if (!shouldInheritConversationScope(message, current)) {
+    return {
+      ...current,
+      ...(currentMentionsCancellation ? { cancellationFollowUp: true } : {}),
+      ...(asksBuyerUnitListQuestion(message) ? { buyerUnitList: true } : {}),
+    };
+  }
 
   const context = extractConversationContext(conversationHistory);
   return {
@@ -191,6 +249,11 @@ function enrichEntitiesWithConversationContext(message, entities = {}, conversat
     ...(context.empreendimento && !current.empreendimento ? { empreendimento: context.empreendimento } : {}),
     ...(context.base && !current.base ? { base: context.base } : {}),
     ...(context.bloco && !current.bloco ? { bloco: context.bloco } : {}),
+    ...(context.empreendimento || context.base || context.bloco ? { commercialFollowUp: true } : {}),
+    ...(currentMentionsCancellation || context.cancellationFollowUp ? { cancellationFollowUp: true } : {}),
+    ...(currentIsVgvStatusChoice && context.vgvFollowUp ? { vgvFollowUp: true } : {}),
+    ...(context.vgvGroupBy ? { vgvGroupBy: context.vgvGroupBy } : {}),
+    ...(asksBuyerUnitListQuestion(message) || recentHistoryAskedBuyerUnitList(conversationHistory) ? { buyerUnitList: true } : {}),
   };
 }
 
@@ -211,10 +274,152 @@ function extractProjectFromMessage(message) {
   return null;
 }
 
+function parseDateRangeFromMessage(message) {
+  const normalized = normalizeText(message);
+  const months = {
+    janeiro: 1,
+    fevereiro: 2,
+    marco: 3,
+    abril: 4,
+    maio: 5,
+    junho: 6,
+    julho: 7,
+    agosto: 8,
+    setembro: 9,
+    outubro: 10,
+    novembro: 11,
+    dezembro: 12,
+  };
+
+  for (const [monthName, monthNumber] of Object.entries(months)) {
+    const match = normalized.match(new RegExp(`\\b${monthName}\\s+(?:de\\s+)?(20\\d{2})\\b`));
+    if (!match) continue;
+    const year = Number(match[1]);
+    const start = `${year}-${String(monthNumber).padStart(2, '0')}-01`;
+    const endDate = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+    const end = `${year}-${String(monthNumber).padStart(2, '0')}-${String(endDate).padStart(2, '0')}`;
+    return { dataInicio: start, dataFim: end };
+  }
+
+  return {};
+}
+
+function buildSemanticFiltersFromEntities(entities = {}, options = {}) {
+  const filters = [];
+  const add = (column, operator, value) => {
+    if (value == null || String(value).trim() === '') return;
+    if (!filters.some((filter) => filter.column === column && filter.operator === operator && String(filter.value) === String(value))) {
+      filters.push({ column, operator, value });
+    }
+  };
+
+  add('empreendimento', 'contains', entities.empreendimento);
+  add('cliente', 'contains', entities.cliente || entities.titular);
+  add('corretor', 'contains', entities.corretor);
+  add('imobiliaria', 'contains', entities.imobiliaria);
+  add('unidade', 'contains', entities.unidade);
+  add('bloco', 'contains', entities.bloco);
+  add('etapa', 'contains', entities.etapa);
+  add('cidade', 'contains', entities.cidade);
+  add('nomeTabelaAjustado', 'contains', entities.tabela || entities.nomeTabelaAjustado);
+  add('Fonte', 'contains', entities.Fonte || entities.fonte || entities.base);
+  add('tipoVenda', 'contains', entities.tipoVenda);
+  add('dataVenda', 'gte', entities.dataInicio || entities.data_inicio || entities.dataVendaInicio);
+  add('dataVenda', 'lte', entities.dataFim || entities.data_fim || entities.dataVendaFim);
+
+  if (options.onlyInactive) add('Status', 'eq', 'INATIVO');
+  else if (options.activeOnly) add('Status', 'neq', 'INATIVO');
+
+  return filters;
+}
+
+function getCommercialFieldIntent(message, options = {}) {
+  const normalized = normalizeText(message);
+  const asksMost = /\bmais\b|\bmaior\b|\bmaiores\b|\btop\b|\branking\b|\bprincipal\b/.test(normalized);
+  const isCancellationScope = options.isCancellationScope === true || isCancellationContextMessage(message);
+  const asksActiveOnly = /\bativas?\b|\bso\s+ativas?\b|\bsomente\s+ativas?\b|\bapenas\s+ativas?\b|\bsem\s+(?:distrat|cancel|inativ)/.test(normalized);
+  const asksAllStatuses = /\binclu(?:i|ir|indo).*(?:distrat|cancel|inativ)|\btodas?\b.*(?:distrat|cancel|inativ)|\bhistoric[ao]\s+geral\b|\bhistoric[ao]\s+completo\b/.test(normalized);
+  const forceVgv = options.forceVgv === true;
+
+  if (forceVgv || /\bvgv\b|\blucro\b|\bfaturamento\b|\btotal\s+financeiro\b|\bvalor\s+total\b/.test(normalized)) {
+    return {
+      filtersScope: asksAllStatuses
+        ? 'all'
+        : asksActiveOnly
+          ? 'active'
+          : isCancellationScope
+            ? 'inactive'
+            : 'active',
+      groupBy: options.vgvGroupBy === 'empreendimento' || hasAny(normalized, ['empreendimento', 'obra', 'projeto']) ? ['empreendimento'] : [],
+      metric: { function: 'sum', column: 'Valor_VGV_Correto' },
+      outputType: asksMost ? 'ranking' : 'summary',
+    };
+  }
+
+  if (isCancellationScope && /\bmotivos?\b|\bpor\s+qual\s+motivo\b|\bporque\b/.test(normalized)) {
+    return {
+      filtersScope: 'inactive',
+      groupBy: ['distrato_motivoDistrato'],
+      metric: { function: 'count' },
+      outputType: 'ranking',
+    };
+  }
+
+  if (isCancellationScope && /\bquando\b|\bdata\b|\bperiodo\b|\bdia\b|\bmes\b/.test(normalized)) {
+    return {
+      filtersScope: 'inactive',
+      groupBy: ['distrato_dataCad'],
+      metric: { function: 'count' },
+      outputType: 'ranking',
+    };
+  }
+
+  if (/\bquem\s+vendeu\b|\bcorretor(?:es)?\b|\bimobiliarias?\b/.test(normalized)) {
+    return {
+      filtersScope: isCancellationScope ? 'inactive' : 'active',
+      groupBy: ['corretor', 'imobiliaria'],
+      metric: { function: 'count' },
+      outputType: 'ranking',
+    };
+  }
+
+  if (/\bestado\s+civil\b/.test(normalized)) {
+    return {
+      filtersScope: isCancellationScope ? 'inactive' : 'active',
+      groupBy: ['estadoCivil'],
+      metric: { function: 'count' },
+      outputType: 'ranking',
+    };
+  }
+
+  if (/\brenda\b/.test(normalized)) {
+    return {
+      filtersScope: isCancellationScope ? 'inactive' : 'active',
+      groupBy: [],
+      metric: { function: /\bmedia\b|\bmedio\b/.test(normalized) ? 'avg' : 'sum', column: 'renda' },
+      outputType: 'summary',
+    };
+  }
+
+  if (/\btipo\s+de\s+venda\b|\btipo\s+venda\b/.test(normalized)) {
+    return {
+      filtersScope: isCancellationScope ? 'inactive' : 'active',
+      groupBy: ['tipoVenda'],
+      metric: { function: 'count' },
+      outputType: 'ranking',
+    };
+  }
+
+  return null;
+}
+
 function planSingleQuery({ message, userRole, intents = [], entities = {} }) {
   const normalized = normalizeText(message);
   const actionTerms = BUSINESS_CATALOG.operationalActions;
-  const sanitizedEntities = sanitizeEntitiesForPlanning(message, entities);
+  const sanitizedEntities = {
+    ...sanitizeEntitiesForPlanning(message, entities),
+    ...parseDateRangeFromMessage(message),
+  };
 
   if (hasAny(normalized, actionTerms)) {
     return buildPlan('action_not_supported', message, entities, 0.98);
@@ -229,14 +434,6 @@ function planSingleQuery({ message, userRole, intents = [], entities = {} }) {
   const mentionsProjectRanking = hasAny(normalized, ['empreendimento', 'empreendimentos', 'obra', 'obras', 'projeto', 'projetos']);
   const asksEachBase = /\bcada\s+base\b|\bpor\s+base\b|\bpor\s+cada\s+base\b|\bvca\s+e\s+lotear\b|\blotear\s+e\s+vca\b/.test(normalized);
   const asksMost = /\bmais\b|\bmaior\b|\bmaiores\b|\btop\b|\branking\b/.test(normalized);
-  const mentionsSales = hasIntent(intents, 'reservas')
-    || /\bvendas?\b|\bcompras?\b|\breservas?\b|\bcontratos?\b|\bcompradores?\b|\btitulares?\b|\bclientes?\b|\bcorretor(?:es)?\b|\bimobiliarias?\b|\bvgv\b/.test(normalized);
-  const mentionsCancellation = hasIntent(intents, 'distratos') || hasAny(normalized, BUSINESS_CATALOG.concepts.distratos.synonyms);
-  const mentionsVgv = /\bvgv\b|\blucro\b|\breceita\b|\bvalor\s+(?:total|vendido|de venda)\b|\bfaturamento\b/.test(normalized);
-  const hasTypology = hasEntity(entities, 'tipologia')
-    || hasEntity(entities, 'pavimento')
-    || (Array.isArray(entities.tipologia_terms) && entities.tipologia_terms.length > 0);
-
   const inferredProject = extractProjectFromMessage(message);
   const inferredBase = parseBaseFromMessage(message);
   const inferredBlock = parseBlockFromMessage(message);
@@ -246,15 +443,35 @@ function planSingleQuery({ message, userRole, intents = [], entities = {} }) {
     ...(inferredBase && !sanitizedEntities.base ? { base: inferredBase } : {}),
     ...(inferredBlock && !sanitizedEntities.bloco ? { bloco: inferredBlock } : {}),
   };
+  const mentionsSales = hasIntent(intents, 'reservas')
+    || inferredEntities.commercialFollowUp === true
+    || /\bvendas?\b|\bcompras?\b|\bcompraram\b|\breservas?\b|\bcontratos?\b|\bcompradores?\b|\btitulares?\b|\bclientes?\b|\bcorretor(?:es)?\b|\bimobiliarias?\b|\bvgv\b/.test(normalized);
+  const mentionsCancellation = inferredEntities.cancellationFollowUp === true
+    || hasIntent(intents, 'distratos')
+    || hasAny(normalized, BUSINESS_CATALOG.concepts.distratos.synonyms);
+  const mentionsVgv = /\bvgv\b|\blucro\b|\breceita\b|\bvalor\s+(?:total|vendido|de venda)\b|\bfaturamento\b/.test(normalized);
+  const fieldIntent = getCommercialFieldIntent(message, {
+    isCancellationScope: mentionsCancellation,
+    forceVgv: inferredEntities.vgvFollowUp === true,
+    vgvGroupBy: inferredEntities.vgvGroupBy,
+  });
+  const hasTypology = hasEntity(entities, 'tipologia')
+    || hasEntity(entities, 'pavimento')
+    || (Array.isArray(entities.tipologia_terms) && entities.tipologia_terms.length > 0);
 
-  if (mentionsCancellation && hasAny(normalized, ['motivo', 'motivos'])) {
+  if (fieldIntent) {
+    const filters = buildSemanticFiltersFromEntities(inferredEntities, {
+      onlyInactive: fieldIntent.filtersScope === 'inactive',
+      activeOnly: fieldIntent.filtersScope === 'active',
+    });
+
     return buildSemanticPlan(message, {
-      filters: [{ column: 'Status', operator: 'eq', value: 'INATIVO' }],
-      groupBy: ['distrato_motivoDistrato'],
-      metric: { function: 'count' },
+      filters,
+      groupBy: fieldIntent.groupBy,
+      metric: fieldIntent.metric,
       order: { by: 'metric', direction: 'desc' },
       limit: inferredEntities.limit || 10,
-      outputType: 'ranking',
+      outputType: fieldIntent.outputType,
     }, 0.9);
   }
 

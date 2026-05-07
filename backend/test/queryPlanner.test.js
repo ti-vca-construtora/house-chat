@@ -152,6 +152,35 @@ function run() {
   assert.equal(purchasedUnitsAndClientsPlan.executionSpec.filters.empreendimento, 'UNI VILLE RESIDENCIAL');
   assert.equal(purchasedUnitsAndClientsPlan.executionSpec.filters.bloco, '16');
 
+  const onlyBlockFollowUpPlan = planQuery({
+    message: 'só os do bloco 16',
+    intents: ['geral'],
+    entities: {},
+    conversationHistory: [
+      { role: 'user', content: 'Quantas vendas temos no empreendimento UNI VILLE?' },
+      { role: 'assistant', content: 'Au au! Boa, vamos pra cima: No empreendimento UNI VILLE RESIDENCIAL, temos 437 vendas.' },
+      { role: 'user', content: 'Quais as unidades e qual o nome dos clientes que compraram?' },
+    ],
+  });
+  assert.equal(onlyBlockFollowUpPlan.planId, 'sales_by_project');
+  assert.equal(onlyBlockFollowUpPlan.executionSpec.filters.empreendimento, 'UNI VILLE RESIDENCIAL');
+  assert.equal(onlyBlockFollowUpPlan.executionSpec.filters.bloco, '16');
+  assert.equal(onlyBlockFollowUpPlan.executionSpec.filters.buyerUnitList, true);
+
+  const exactBuyerUnitQuestionPlan = planQuery({
+    message: 'Quais as unidades e qual o nome dos clientes que compraram? só os do bloco 16.',
+    intents: ['estoque', 'clientes'],
+    entities: {},
+    conversationHistory: [
+      { role: 'user', content: 'Quantas vendas temos no empreendimento UNI VILLE?' },
+      { role: 'assistant', content: 'Au au! Boa, vamos pra cima: No empreendimento UNI VILLE RESIDENCIAL, temos 437 vendas.' },
+    ],
+  });
+  assert.equal(exactBuyerUnitQuestionPlan.planId, 'sales_by_project');
+  assert.equal(exactBuyerUnitQuestionPlan.executionSpec.filters.empreendimento, 'UNI VILLE RESIDENCIAL');
+  assert.equal(exactBuyerUnitQuestionPlan.executionSpec.filters.bloco, '16');
+  assert.equal(exactBuyerUnitQuestionPlan.executionSpec.filters.buyerUnitList, true);
+
   const cancellationPlan = planQuery({
     message: 'Quantos distratos tem no Campus Vivant?',
     intents: ['distratos'],
@@ -165,7 +194,9 @@ function run() {
     intents: [],
     entities: {},
   });
-  assert.equal(topSellerPlan.planId, 'sales_by_project');
+  assert.equal(topSellerPlan.planId, 'semantic_aggregate');
+  assert.deepEqual(topSellerPlan.executionSpec.groupBy, ['corretor', 'imobiliaria']);
+  assert.deepEqual(topSellerPlan.executionSpec.metric, { function: 'count' });
 
   const vgvPlan = planQuery({
     message: 'Qual empreendimento teve maior VGV?',
@@ -176,6 +207,36 @@ function run() {
   assert.deepEqual(vgvPlan.executionSpec.tables, ['vw_Vendas_Consolidada']);
   assert.deepEqual(vgvPlan.executionSpec.groupBy, ['empreendimento']);
   assert.deepEqual(vgvPlan.executionSpec.metric, { function: 'sum', column: 'Valor_VGV_Correto' });
+  assert.ok(vgvPlan.executionSpec.filters.some((filter) => filter.column === 'Status' && filter.operator === 'neq' && filter.value === 'INATIVO'));
+
+  const activeVgvPlan = planQuery({
+    message: 'Qual empreendimento teve maior VGV considerando somente vendas ativas?',
+    intents: [],
+    entities: {},
+  });
+  assert.equal(activeVgvPlan.planId, 'semantic_aggregate');
+  assert.deepEqual(activeVgvPlan.executionSpec.tables, ['vw_Vendas_Consolidada']);
+  assert.deepEqual(activeVgvPlan.executionSpec.groupBy, ['empreendimento']);
+  assert.deepEqual(activeVgvPlan.executionSpec.metric, { function: 'sum', column: 'Valor_VGV_Correto' });
+  assert.ok(activeVgvPlan.executionSpec.filters.some((filter) => filter.column === 'Status' && filter.operator === 'neq' && filter.value === 'INATIVO'));
+
+  const projectVgvPlan = planQuery({
+    message: 'Qual é o VGV do Dona Olivia atualmente?',
+    intents: [],
+    entities: {},
+  });
+  assert.equal(projectVgvPlan.planId, 'semantic_aggregate');
+  assert.deepEqual(projectVgvPlan.executionSpec.metric, { function: 'sum', column: 'Valor_VGV_Correto' });
+  assert.ok(projectVgvPlan.executionSpec.filters.some((filter) => filter.column === 'empreendimento' && filter.operator === 'contains' && filter.value === 'Dona Olivia'));
+  assert.ok(projectVgvPlan.executionSpec.filters.some((filter) => filter.column === 'Status' && filter.operator === 'neq' && filter.value === 'INATIVO'));
+
+  const allVgvPlan = planQuery({
+    message: 'Qual o VGV incluindo distratadas e canceladas?',
+    intents: [],
+    entities: {},
+  });
+  assert.equal(allVgvPlan.planId, 'semantic_aggregate');
+  assert.ok(!allVgvPlan.executionSpec.filters.some((filter) => filter.column === 'Status'));
 
   const cancellationReasonPlan = planQuery({
     message: 'Quais motivos de cancelamento mais aparecem?',
@@ -186,6 +247,57 @@ function run() {
   assert.deepEqual(cancellationReasonPlan.executionSpec.tables, ['vw_Vendas_Consolidada']);
   assert.deepEqual(cancellationReasonPlan.executionSpec.groupBy, ['distrato_motivoDistrato']);
   assert.deepEqual(cancellationReasonPlan.executionSpec.filters, [{ column: 'Status', operator: 'eq', value: 'INATIVO' }]);
+
+  const vgvDistratosFollowUpPlan = planQuery({
+    message: 'Qual o valor de VGV total desses 65 distratos?',
+    intents: ['reservas'],
+    entities: {},
+    conversationHistory: [
+      { role: 'user', content: 'Quantos distratos temos no Dona Olivia Residencial?' },
+      { role: 'assistant', content: 'Au au! O Dona Olivia Residencial tem 65 distratos.' },
+    ],
+  });
+  assert.equal(vgvDistratosFollowUpPlan.planId, 'semantic_aggregate');
+  assert.deepEqual(vgvDistratosFollowUpPlan.executionSpec.metric, { function: 'sum', column: 'Valor_VGV_Correto' });
+  assert.ok(vgvDistratosFollowUpPlan.executionSpec.filters.some((filter) => filter.column === 'Status' && filter.operator === 'eq' && filter.value === 'INATIVO'));
+  assert.ok(vgvDistratosFollowUpPlan.executionSpec.filters.some((filter) => filter.column === 'empreendimento' && filter.operator === 'contains' && filter.value === 'Dona Olivia Residencial'));
+
+  const cancellationDateFollowUpPlan = planQuery({
+    message: 'Quando foram esses distratos?',
+    intents: ['reservas'],
+    entities: {},
+    conversationHistory: [
+      { role: 'user', content: 'Quantos distratos temos no Dona Olivia Residencial?' },
+    ],
+  });
+  assert.equal(cancellationDateFollowUpPlan.planId, 'semantic_aggregate');
+  assert.deepEqual(cancellationDateFollowUpPlan.executionSpec.groupBy, ['distrato_dataCad']);
+  assert.ok(cancellationDateFollowUpPlan.executionSpec.filters.some((filter) => filter.column === 'empreendimento' && filter.value === 'Dona Olivia Residencial'));
+
+  const incomePlan = planQuery({
+    message: 'Qual a renda media dos compradores?',
+    intents: [],
+    entities: {},
+  });
+  assert.equal(incomePlan.planId, 'semantic_aggregate');
+  assert.deepEqual(incomePlan.executionSpec.metric, { function: 'avg', column: 'renda' });
+
+  const saleTypePlan = planQuery({
+    message: 'Qual tipo de venda mais aparece?',
+    intents: [],
+    entities: {},
+  });
+  assert.equal(saleTypePlan.planId, 'semantic_aggregate');
+  assert.deepEqual(saleTypePlan.executionSpec.groupBy, ['tipoVenda']);
+
+  const januarySalesPlan = planQuery({
+    message: 'Vendas em janeiro de 2026',
+    intents: ['reservas'],
+    entities: {},
+  });
+  assert.equal(januarySalesPlan.planId, 'sales_by_project');
+  assert.equal(januarySalesPlan.executionSpec.filters.dataInicio, '2026-01-01');
+  assert.equal(januarySalesPlan.executionSpec.filters.dataFim, '2026-01-31');
 
   const compositePlan = planQuery({
     message: `Diga pra mim qual é:

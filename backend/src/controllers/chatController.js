@@ -48,8 +48,9 @@ async function sendMessage(req, res, next) {
       entities,
       conversationHistory: priorHistory,
     });
-    const requiredPermissions = queryPlan.requiredPermissions.length > 0
-      ? queryPlan.requiredPermissions
+    const planPermissions = Array.isArray(queryPlan.requiredPermissions) ? queryPlan.requiredPermissions : [];
+    const requiredPermissions = planPermissions.length > 0
+      ? planPermissions
       : permissions;
 
     // ── Layer 2: verificação pós-classificação por intent ────────────────────

@@ -7,21 +7,39 @@ const PAGE_SIZE = 1000;
 const CONSOLIDATED_SALES_TABLE = 'vw_Vendas_Consolidada';
 const CONSOLIDATED_SALES_COLUMNS = [
   'referencia',
+  'referenciaData',
   'dataVenda',
   'cliente',
+  'idEmpreendimento',
   'empreendimento',
   'etapa',
   'bloco',
   'unidade',
+  'idTipoVenda',
+  'tipoVenda',
   'cidade',
+  'cepCliente',
   'renda',
   'sexo',
+  'idade',
+  'valorContrato',
   'estadoCivil',
   'corretor',
+  'idcorretor',
+  'idimobiliaria',
   'imobiliaria',
+  'idmidia',
+  'midia',
   'nomeTabelaAjustado',
+  'dataTabelaAjustado',
+  'Valor_VGV',
+  'VALOR_ENTRADA',
   'Fonte',
+  'id',
+  'referencia_fonte',
   'Status',
+  'distrato_dataCad',
+  'distrato_situacaoData',
   'distrato_motivoDistrato',
   'Valor_VGV_Correto',
 ].join(', ');
@@ -123,6 +141,78 @@ function summarizeNumericBy(rows, groupKey, numericKey, valueName = 'total') {
     .map(([name, total]) => ({ [groupKey]: name, [valueName]: total }));
 }
 
+function formatCurrency(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 'R$ 0,00';
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(number);
+}
+
+function normalizeSearchText(value) {
+  return normalizeText(value)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function getSearchTokens(value) {
+  return normalizeSearchText(value)
+    .split(' ')
+    .filter((token) => token.length >= 2);
+}
+
+function scoreProjectName(candidate, query) {
+  const candidateText = normalizeSearchText(candidate);
+  const queryText = normalizeSearchText(query);
+  if (!candidateText || !queryText) return 0;
+  if (candidateText === queryText) return 1;
+  if (candidateText.includes(queryText) || queryText.includes(candidateText)) return 0.95;
+
+  const candidateTokens = new Set(getSearchTokens(candidateText));
+  const queryTokens = getSearchTokens(queryText);
+  if (queryTokens.length === 0) return 0;
+
+  const matchedTokens = queryTokens.filter((token) => candidateTokens.has(token));
+  const partialMatches = queryTokens.filter((token) => (
+    !candidateTokens.has(token)
+    && Array.from(candidateTokens).some((candidateToken) => candidateToken.includes(token) || token.includes(candidateToken))
+  ));
+  const score = (matchedTokens.length + partialMatches.length * 0.7) / queryTokens.length;
+  return Math.min(score, 0.94);
+}
+
+function findSimilarProjects(rows, query, limit = 5) {
+  const projects = new Map();
+  for (const row of rows) {
+    if (!row.empreendimento) continue;
+    const key = normalizeSearchText(row.empreendimento);
+    const current = projects.get(key) || {
+      empreendimento: row.empreendimento,
+      score: scoreProjectName(row.empreendimento, query),
+      total: 0,
+    };
+    current.total += 1;
+    projects.set(key, current);
+  }
+
+  return Array.from(projects.values())
+    .filter((project) => project.score >= 0.45)
+    .sort((a, b) => (b.score - a.score) || (b.total - a.total) || a.empreendimento.localeCompare(b.empreendimento))
+    .slice(0, limit);
+}
+
+function resolveProjectMatch(rows, query) {
+  const suggestions = findSimilarProjects(rows, query);
+  const best = suggestions[0] || null;
+  const second = suggestions[1] || null;
+  const ambiguous = Boolean(best && second && best.score >= 0.85 && second.score >= best.score - 0.05);
+
+  if (!best || best.score < 0.85 || ambiguous) {
+    return { matchedProject: null, suggestions, ambiguous };
+  }
+
+  return { matchedProject: best.empreendimento, suggestions, ambiguous: false };
+}
+
 function isPrimaryPricedUnit(row, minimumValidPrice = 50000) {
   const price = Number(row.valor_total);
   if (!Number.isFinite(price) || price < minimumValidPrice) return false;
@@ -162,15 +252,25 @@ function wantsHistoricalSales(message) {
 function asksSimpleSalesCount(message) {
   const normalized = normalizeText(message);
   return /\bquant[ao]s?\b|\btotal\b|\bqtd\b|\bquantidade\b|\btemos\b/.test(normalized)
-    && /\bvendas?\b/.test(normalized)
     && !/\bvgv\b|\bvalor\b|\bfaturamento\b|\breceita\b|\bcorretor(?:es)?\b|\bimobiliarias?\b|\bclientes?\b|\bcompradores?\b|\bdistratos?\b|\bcancelamentos?\b|\bstatus\b|\bmotivos?\b/.test(normalized);
+}
+
+function asksSimpleCancellationCount(message) {
+  const normalized = normalizeText(message);
+  return /\bquant[ao]s?\b|\btotal\b|\bqtd\b|\bquantidade\b|\btemos\b/.test(normalized)
+    && /\bdistratos?\b|\bcancelamentos?\b|\bcancelad[ao]s?\b|\brescis(?:ao|oes)\b|\binativ[ao]s?\b/.test(normalized)
+    && !/\bvgv\b|\bvalor\b|\bfaturamento\b|\breceita\b|\bcorretor(?:es)?\b|\bimobiliarias?\b|\bclientes?\b|\bcompradores?\b|\bmotivos?\b|\bdata\b|\bquando\b/.test(normalized);
+}
+
+function asksCountExplanation(message) {
+  return /\bpor\s+que\b|\bporque\b|\bpor\s+qual\s+motivo\b|\bcomo\s+chegou\b|\bde\s+onde\b|\bexplica\b|\bexplique\b/.test(normalizeText(message));
 }
 
 function hasOnlySimpleScopeFilters(filters = {}) {
   const meaningfulKeys = Object.entries(filters)
     .filter(([, value]) => value != null && String(value).trim() !== '')
     .map(([key]) => key);
-  return meaningfulKeys.every((key) => ['base', 'Fonte', 'fonte', 'empreendimento', 'bloco'].includes(key));
+  return meaningfulKeys.every((key) => ['base', 'Fonte', 'fonte', 'empreendimento', 'empreendimento_consultado_original', 'bloco'].includes(key));
 }
 
 function formatSalesScope(filters = {}) {
@@ -185,6 +285,170 @@ function formatSalesScope(filters = {}) {
 
 function pluralizeSale(total) {
   return Number(total) === 1 ? 'venda' : 'vendas';
+}
+
+function stripInternalFilters(filters = {}) {
+  const { commercialFollowUp, buyerUnitList, cancellationFollowUp, ...publicFilters } = filters;
+  return publicFilters;
+}
+
+function withoutFilter(filters = {}, filterKey) {
+  const { [filterKey]: _removed, ...rest } = filters;
+  return rest;
+}
+
+function asksBuyerUnitList(message) {
+  const normalized = normalizeText(message);
+  const asksUnits = /\bunidades?\b|\bapartamentos?\b|\baptos?\b/.test(normalized);
+  const asksBuyers = /\bclientes?\b|\bcomprad(?:or|ores|ora|oras)\b|\bcompraram\b|\btitulares?\b|\bnomes?\b/.test(normalized);
+  return asksUnits && asksBuyers;
+}
+
+function formatBuyerUnitList(rows, filters = {}) {
+  const scope = formatSalesScope(filters).replace(/^./, (char) => char.toUpperCase());
+  if (rows.length === 0) {
+    return `Au au! ${scope}, nao encontrei unidades compradas com esses filtros.`;
+  }
+
+  const limit = 50;
+  const lines = rows.slice(0, limit).map((row, index) => {
+    const unidade = [row.bloco, row.unidade].filter(Boolean).join(' - ') || 'Unidade nao informada';
+    const cliente = row.cliente || 'Cliente nao informado';
+    return `${index + 1}. ${unidade} - ${cliente}`;
+  });
+  const suffix = rows.length > limit
+    ? `\n\nTenho mais ${rows.length - limit} registros nesse filtro.`
+    : '';
+
+  return `Au au! Fechou, aqui estao as unidades e os clientes compradores ${scope.toLowerCase()}:\n\n${lines.join('\n')}${suffix}`;
+}
+
+function formatProjectNotFoundAnswer(filters = {}, suggestions = []) {
+  const requestedProject = filters.empreendimento;
+  const scopeParts = [];
+  if (filters.bloco) scopeParts.push(`bloco ${filters.bloco}`);
+  const base = filters.base || filters.Fonte || filters.fonte;
+  if (base) scopeParts.push(`base ${String(base).toUpperCase()}`);
+  const scope = scopeParts.length ? ` com filtro de ${scopeParts.join(' e ')}` : '';
+
+  if (suggestions.length === 0) {
+    return `Au au! Nao encontrei vendas para "${requestedProject}"${scope}. Pode ser nome abreviado ou diferente no cadastro.`;
+  }
+
+  const suggestionText = suggestions.map((project) => `${project.empreendimento} (${project.total} vendas)`).join(', ');
+  return `Au au! Nao encontrei um empreendimento exatamente como "${requestedProject}"${scope}. Achei nomes parecidos: ${suggestionText}.`;
+}
+
+function formatSalesExplanation(rows, filters = {}) {
+  const scope = formatSalesScope(filters).replace(/^./, (char) => char.toUpperCase());
+  const sourceCounts = summarizeBy(rows, 'Fonte');
+  const sourceText = Object.entries(sourceCounts)
+    .map(([source, total]) => `${source}: ${total}`)
+    .join(', ') || 'sem fonte informada';
+  const projectCounts = summarizeRankingBy(rows, 'empreendimento', 'total_vendas').slice(0, 5);
+  const projectText = projectCounts
+    .map((item) => `${item.empreendimento}: ${item.total_vendas}`)
+    .join(', ');
+
+  return [
+    `Au au! Cheguei nesse numero contando as vendas ativas ${scope.toLowerCase()}.`,
+    `Total considerado: ${rows.length} ${pluralizeSale(rows.length)}.`,
+    `Quebra por fonte: ${sourceText}.`,
+    projectText ? `Empreendimento(s) considerado(s): ${projectText}.` : null,
+  ].filter(Boolean).join('\n');
+}
+
+function semanticFilterValue(filters = [], column) {
+  const filter = filters.find((item) => item.column === column);
+  return filter ? filter.value : null;
+}
+
+function semanticHasStatus(filters = [], operator, value) {
+  return filters.some((filter) => (
+    filter.column === 'Status'
+    && filter.operator === operator
+    && normalizeText(filter.value) === normalizeText(value)
+  ));
+}
+
+function formatSemanticScope(filters = []) {
+  const parts = [];
+  const project = semanticFilterValue(filters, 'empreendimento');
+  const block = semanticFilterValue(filters, 'bloco');
+  const unit = semanticFilterValue(filters, 'unidade');
+  const source = semanticFilterValue(filters, 'Fonte');
+  const table = semanticFilterValue(filters, 'nomeTabelaAjustado');
+  if (project) parts.push(`do ${project}`);
+  if (block) parts.push(`no bloco ${block}`);
+  if (unit) parts.push(`na unidade ${unit}`);
+  if (source) parts.push(`na base ${String(source).toUpperCase()}`);
+  if (table) parts.push(`na tabela comercial ${table}`);
+  return parts.length ? parts.join(', ') : 'no escopo consultado';
+}
+
+function formatMetricValue(metric, value) {
+  if (metric?.column === 'Valor_VGV_Correto' || metric?.column === 'renda' || /valor|vgv|renda/i.test(metric?.column || '')) {
+    return formatCurrency(value);
+  }
+  if (value == null) return '0';
+  return new Intl.NumberFormat('pt-BR').format(Number(value));
+}
+
+function formatSemanticRankingItem(result, groupBy) {
+  const group = result.group || {};
+  const value = formatMetricValue(result.metric, result.metric?.value);
+  if (groupBy.includes('corretor') && groupBy.includes('imobiliaria')) {
+    return `${group.corretor || 'Corretor nao informado'} (${group.imobiliaria || 'imobiliaria nao informada'}): ${value}`;
+  }
+  const label = groupBy.map((column) => group[column] || 'Nao informado').join(' - ');
+  return `${label}: ${value}`;
+}
+
+function formatSemanticDirectAnswer(spec, results, filteredRows, limit) {
+  const metric = spec.metric || { function: 'count' };
+  const groupBy = Array.isArray(spec.groupBy) ? spec.groupBy : [];
+  const filters = Array.isArray(spec.filters) ? spec.filters : [];
+  const scope = formatSemanticScope(filters);
+  const isInactive = semanticHasStatus(filters, 'eq', 'INATIVO');
+  const isActiveOnly = semanticHasStatus(filters, 'neq', 'INATIVO');
+  const totalLabel = isInactive ? 'distratos' : isActiveOnly ? 'vendas ativas' : 'vendas no criterio pedido';
+
+  if (results.length === 0 && filteredRows.length === 0) {
+    return `Au au! Nao encontrei registros ${scope} com esses filtros.`;
+  }
+
+  if (groupBy.length === 0 && metric.function !== 'count') {
+    const value = results[0]?.metric?.value ?? 0;
+    const formatted = formatMetricValue(metric, value);
+    const rendaWarning = metric.column === 'renda'
+      ? '\n\nEsse dado pode ter distorcoes porque depende do preenchimento feito no cadastro do CVCRM.'
+      : '';
+    const metricName = metric.column === 'Valor_VGV_Correto'
+      ? 'VGV total'
+      : metric.function === 'avg' && metric.column === 'renda'
+        ? 'renda media'
+        : 'total';
+    return `Au au! O ${metricName} ${scope} e ${formatted}, considerando ${filteredRows.length} ${totalLabel}.${rendaWarning}`;
+  }
+
+  if (groupBy.length > 0) {
+    const titleByColumn = {
+      distrato_motivoDistrato: 'motivos de distrato',
+      distrato_dataCad: 'datas dos distratos',
+      corretor: 'corretores e imobiliarias',
+      estadoCivil: 'estados civis',
+      tipoVenda: 'tipos de venda',
+      empreendimento: 'empreendimentos',
+      Fonte: 'bases',
+      nomeTabelaAjustado: 'tabelas comerciais',
+    };
+    const title = titleByColumn[groupBy[0]] || 'principais grupos';
+    const lines = results.slice(0, limit).map((result, index) => `${index + 1}. ${formatSemanticRankingItem(result, groupBy)}`);
+    const suffix = results.length > limit ? `\n\nTenho mais ${results.length - limit} grupos alem desses.` : '';
+    return `Au au! Aqui esta o ranking de ${title} ${scope}:\n\n${lines.join('\n')}${suffix}`;
+  }
+
+  return null;
 }
 
 function isConsolidatedSalesQuestion(message) {
@@ -229,6 +493,17 @@ function compareFilterValue(rowValue, operator, expectedValue) {
     if (operator === 'lte') return rowNumber <= expectedNumber;
     if (operator === 'gt') return rowNumber > expectedNumber;
     if (operator === 'lt') return rowNumber < expectedNumber;
+  }
+
+  if (['gte', 'lte', 'gt', 'lt'].includes(operator)) {
+    const rowDate = Date.parse(rowValue);
+    const expectedDate = Date.parse(expectedValue);
+    if (Number.isFinite(rowDate) && Number.isFinite(expectedDate)) {
+      if (operator === 'gte') return rowDate >= expectedDate;
+      if (operator === 'lte') return rowDate <= expectedDate;
+      if (operator === 'gt') return rowDate > expectedDate;
+      if (operator === 'lt') return rowDate < expectedDate;
+    }
   }
 
   const rowText = normalizeText(rowValue);
@@ -689,8 +964,15 @@ async function executeSemanticAggregate(plan) {
     return direction === 'asc' ? av - bv : bv - av;
   });
 
+  const limitedResults = results.slice(0, limit);
+  const directAnswer = formatSemanticDirectAnswer(spec, results, filteredRows, limit);
+
   return {
     type: 'semantic_aggregate',
+    direct_answer: directAnswer,
+    response_guidance: directAnswer
+      ? 'Responda apenas a direct_answer. Nao peca autorizacao e nao exponha nomes tecnicos de colunas ou tabelas.'
+      : null,
     outputType: spec.outputType || 'summary',
     tables,
     filters: spec.filters || [],
@@ -702,7 +984,7 @@ async function executeSemanticAggregate(plan) {
     total_rows_read: rows.length,
     total_rows_after_filters: filteredRows.length,
     total_groups: groups.size,
-    results: results.slice(0, limit),
+    results: limitedResults,
     not_answerable_reason: results.length === 0 ? 'A consulta semantica foi valida, mas nao encontrou registros com os filtros aplicados.' : null,
     suggested_alternatives: results.length === 0 ? ['Remover ou ampliar algum filtro.', 'Consultar um resumo da tabela relacionada.'] : [],
   };
@@ -763,40 +1045,108 @@ async function getConsolidatedSalesRows(filters = {}, options = {}) {
 function mapConsolidatedSample(row) {
   return {
     referencia: row.referencia,
+    referenciaData: row.referenciaData,
     dataVenda: row.dataVenda,
     cliente: row.cliente,
+    idEmpreendimento: row.idEmpreendimento,
     empreendimento: row.empreendimento,
     etapa: row.etapa,
     bloco: row.bloco,
     unidade: row.unidade,
+    idTipoVenda: row.idTipoVenda,
+    tipoVenda: row.tipoVenda,
     cidade: row.cidade,
+    cepCliente: row.cepCliente,
     corretor: row.corretor,
+    idcorretor: row.idcorretor,
     imobiliaria: row.imobiliaria,
+    idimobiliaria: row.idimobiliaria,
     estadoCivil: row.estadoCivil,
     sexo: row.sexo,
+    idade: row.idade,
     renda: row.renda,
+    valorContrato: row.valorContrato,
+    midia: row.midia,
     nomeTabelaAjustado: row.nomeTabelaAjustado,
+    dataTabelaAjustado: row.dataTabelaAjustado,
+    Valor_VGV: row.Valor_VGV,
+    VALOR_ENTRADA: row.VALOR_ENTRADA,
     Fonte: row.Fonte,
+    id: row.id,
+    referencia_fonte: row.referencia_fonte,
     Status: row.Status,
+    distrato_dataCad: row.distrato_dataCad,
+    distrato_situacaoData: row.distrato_situacaoData,
     distrato_motivoDistrato: row.distrato_motivoDistrato,
     Valor_VGV_Correto: row.Valor_VGV_Correto,
   };
 }
 
 async function executeSalesByProject(plan) {
-  const filters = plan.executionSpec.filters || {};
+  const rawFilters = plan.executionSpec.filters || {};
+  let filters = stripInternalFilters(rawFilters);
   const includeInactive = wantsHistoricalSales(plan.executionSpec.message || '');
-  const rows = await getConsolidatedSalesRows(filters, { includeInactive });
-  const activeRows = rows.filter((row) => !isCancellationStatus(row.Status));
-  const cancelledRows = rows.filter((row) => isCancellationStatus(row.Status));
-  const rowsForRanking = includeInactive ? rows : activeRows;
+  let projectSuggestions = [];
+  let matchedProject = null;
+  let ambiguousProject = false;
+
+  if (filters.empreendimento) {
+    const candidateRows = await getConsolidatedSalesRows(withoutFilter(filters, 'empreendimento'), { includeInactive });
+    const resolution = resolveProjectMatch(candidateRows, filters.empreendimento);
+    projectSuggestions = resolution.suggestions;
+    matchedProject = resolution.matchedProject;
+    ambiguousProject = resolution.ambiguous;
+
+    if (matchedProject) {
+      filters = {
+        ...filters,
+        empreendimento: matchedProject,
+        empreendimento_consultado_original: rawFilters.empreendimento,
+      };
+    }
+  }
+
+  let rows = ambiguousProject
+    ? []
+    : filters.empreendimento && matchedProject
+    ? (await getConsolidatedSalesRows(withoutFilter(filters, 'empreendimento'), { includeInactive }))
+      .filter((row) => normalizeSearchText(row.empreendimento) === normalizeSearchText(matchedProject))
+    : await getConsolidatedSalesRows(filters, { includeInactive });
+  let activeRows = rows.filter((row) => !isCancellationStatus(row.Status));
+  let cancelledRows = rows.filter((row) => isCancellationStatus(row.Status));
+  let rowsForRanking = includeInactive ? rows : activeRows;
+
+  if (filters.empreendimento && !matchedProject && rowsForRanking.length === 0 && !ambiguousProject) {
+    const candidateRows = await getConsolidatedSalesRows(withoutFilter(filters, 'empreendimento'), { includeInactive });
+    projectSuggestions = findSimilarProjects(candidateRows, filters.empreendimento);
+    const bestMatch = projectSuggestions[0] || null;
+
+    if (bestMatch && bestMatch.score >= 0.85) {
+      matchedProject = bestMatch.empreendimento;
+      rows = candidateRows.filter((row) => normalizeSearchText(row.empreendimento) === normalizeSearchText(bestMatch.empreendimento));
+      filters = {
+        ...filters,
+        empreendimento: bestMatch.empreendimento,
+        empreendimento_consultado_original: rawFilters.empreendimento,
+      };
+      activeRows = rows.filter((row) => !isCancellationStatus(row.Status));
+      cancelledRows = rows.filter((row) => isCancellationStatus(row.Status));
+      rowsForRanking = includeInactive ? rows : activeRows;
+    }
+  }
 
   const rankingByProject = summarizeRankingBy(rowsForRanking, 'empreendimento', 'total_vendas');
   const shouldUseDirectAnswer = !includeInactive
     && asksSimpleSalesCount(plan.executionSpec.message || '')
     && hasOnlySimpleScopeFilters(filters);
   const directAnswer = shouldUseDirectAnswer
-    ? `Au au! Boa, vamos pra cima: ${formatSalesScope(filters).replace(/^./, (char) => char.toUpperCase())}, temos ${rowsForRanking.length} ${pluralizeSale(rowsForRanking.length)}.`
+    ? (rowsForRanking.length === 0 || ambiguousProject) && rawFilters.empreendimento
+      ? formatProjectNotFoundAnswer(rawFilters, projectSuggestions)
+      : `Au au! Boa, vamos pra cima: ${formatSalesScope(filters).replace(/^./, (char) => char.toUpperCase())}, temos ${rowsForRanking.length} ${pluralizeSale(rowsForRanking.length)}.`
+    : (asksBuyerUnitList(plan.executionSpec.message || '') || rawFilters.buyerUnitList === true)
+      ? formatBuyerUnitList(rowsForRanking, filters)
+    : asksCountExplanation(plan.executionSpec.message || '')
+      ? formatSalesExplanation(rowsForRanking, filters)
     : null;
 
   return {
@@ -808,6 +1158,8 @@ async function executeSalesByProject(plan) {
     source_table: CONSOLIDATED_SALES_TABLE,
     default_rule: includeInactive ? 'historico_completo' : 'vendas_ativas_Status_diferente_de_INATIVO',
     filters,
+    matched_project: matchedProject,
+    project_suggestions: projectSuggestions,
     total: rowsForRanking.length,
     total_active_sales: activeRows.length,
     total_cancelled_or_distracted: cancelledRows.length,
@@ -834,16 +1186,53 @@ async function executeSalesByProject(plan) {
 }
 
 async function executeCancellationsByProject(plan) {
-  const filters = plan.executionSpec.filters || {};
-  const rows = await getConsolidatedSalesRows(filters, { onlyInactive: true });
+  const rawFilters = plan.executionSpec.filters || {};
+  let filters = stripInternalFilters(rawFilters);
+  let projectSuggestions = [];
+  let matchedProject = null;
+  let ambiguousProject = false;
+
+  if (filters.empreendimento) {
+    const candidateRows = await getConsolidatedSalesRows(withoutFilter(filters, 'empreendimento'), { onlyInactive: true });
+    const resolution = resolveProjectMatch(candidateRows, filters.empreendimento);
+    projectSuggestions = resolution.suggestions;
+    matchedProject = resolution.matchedProject;
+    ambiguousProject = resolution.ambiguous;
+
+    if (matchedProject) {
+      filters = {
+        ...filters,
+        empreendimento: matchedProject,
+        empreendimento_consultado_original: rawFilters.empreendimento,
+      };
+    }
+  }
+
+  const rows = ambiguousProject
+    ? []
+    : filters.empreendimento && matchedProject
+      ? (await getConsolidatedSalesRows(withoutFilter(filters, 'empreendimento'), { onlyInactive: true }))
+        .filter((row) => normalizeSearchText(row.empreendimento) === normalizeSearchText(matchedProject))
+      : await getConsolidatedSalesRows(filters, { onlyInactive: true });
 
   const rankingByProject = summarizeRankingBy(rows, 'empreendimento', 'total_distratos');
+  const directAnswer = asksSimpleCancellationCount(plan.executionSpec.message || '')
+    ? (rows.length === 0 || ambiguousProject) && rawFilters.empreendimento
+      ? formatProjectNotFoundAnswer(rawFilters, projectSuggestions)
+      : `Au au! ${formatSalesScope(filters).replace(/^./, (char) => char.toUpperCase())}, temos ${rows.length} ${rows.length === 1 ? 'distrato' : 'distratos'}.`
+    : null;
 
   return {
     type: 'cancellations_summary',
+    direct_answer: directAnswer,
+    response_guidance: directAnswer
+      ? 'Responda apenas a direct_answer. Nao mencione tabela, coluna, Status ou filtros tecnicos.'
+      : null,
     source_table: CONSOLIDATED_SALES_TABLE,
     default_rule: 'Status_INATIVO',
     filters,
+    matched_project: matchedProject,
+    project_suggestions: projectSuggestions,
     total: rows.length,
     total_vgv_correto: summarizeNumeric(rows, 'Valor_VGV_Correto').total,
     avg_vgv_correto: summarizeNumeric(rows, 'Valor_VGV_Correto').average,

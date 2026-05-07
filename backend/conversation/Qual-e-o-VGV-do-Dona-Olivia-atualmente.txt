@@ -1,0 +1,18 @@
+Qual é o VGV do Dona Olivia atualmente?
+
+Exportada em 07/05/2026, 16:32:33
+
+
+
+[07/05/2026, 16:32:05] Usuario:
+Qual é o VGV do Dona Olivia atualmente?
+
+[07/05/2026, 16:32:05] House Bot:
+Au au! Pra calcular certinho, voce quer considerar do VGV no empreendimento Dona Olivia com unidades distratadas/canceladas tambem, ou somente as vendas ativas?
+
+[07/05/2026, 16:32:17] Usuario:
+considere somente vendas ativas
+
+[07/05/2026, 16:32:30] House Bot:
+Au au! Nao encontrei registros do Dona Olivia com unidades distratadas/canceladas tambem, ou somente as vendas ativas com esses filtros.
+
