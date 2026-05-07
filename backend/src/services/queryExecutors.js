@@ -4,6 +4,27 @@ const { normalizeText } = require('./queryPlanner');
 const { validateAnswerPayload } = require('./resultValidator');
 
 const PAGE_SIZE = 1000;
+const CONSOLIDATED_SALES_TABLE = 'vw_Vendas_Consolidada';
+const CONSOLIDATED_SALES_COLUMNS = [
+  'referencia',
+  'dataVenda',
+  'cliente',
+  'empreendimento',
+  'etapa',
+  'bloco',
+  'unidade',
+  'cidade',
+  'renda',
+  'sexo',
+  'estadoCivil',
+  'corretor',
+  'imobiliaria',
+  'nomeTabelaAjustado',
+  'Fonte',
+  'Status',
+  'distrato_motivoDistrato',
+  'Valor_VGV_Correto',
+].join(', ');
 
 async function fetchAll(tableName, columns, applyFilters = (query) => query) {
   let from = 0;
@@ -77,6 +98,31 @@ function summarizeRankingBy(rows, key, valueName = 'total') {
     .map(([name, total]) => ({ [key]: name, [valueName]: total }));
 }
 
+function summarizeNumeric(rows, key) {
+  const values = rows
+    .map((row) => Number(row[key]))
+    .filter((value) => Number.isFinite(value));
+  const sum = values.reduce((total, value) => total + value, 0);
+  return {
+    total: sum,
+    average: values.length > 0 ? sum / values.length : null,
+    count: values.length,
+  };
+}
+
+function summarizeNumericBy(rows, groupKey, numericKey, valueName = 'total') {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = row[groupKey] || 'Nao informado';
+    const value = Number(row[numericKey]);
+    if (!Number.isFinite(value)) continue;
+    groups.set(key, (groups.get(key) || 0) + value);
+  }
+  return Array.from(groups.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, total]) => ({ [groupKey]: name, [valueName]: total }));
+}
+
 function isPrimaryPricedUnit(row, minimumValidPrice = 50000) {
   const price = Number(row.valor_total);
   if (!Number.isFinite(price) || price < minimumValidPrice) return false;
@@ -96,6 +142,76 @@ function commercialLimit(reason, alternatives = []) {
     not_answerable_reason: reason,
     suggested_alternatives: alternatives,
   };
+}
+
+function consolidatedOnlyLimit(requestedArea) {
+  return commercialLimit(
+    `Por enquanto, o Supabase esta operando somente com a vw_Vendas_Consolidada. Nao ha tabela ativa de ${requestedArea} para consulta.`,
+    ['Consultar vendas, compradores, unidades vendidas, distratos, corretores, imobiliarias, base/Fonte ou VGV pela consolidada.']
+  );
+}
+
+function isCancellationStatus(value) {
+  return normalizeText(value) === 'inativo';
+}
+
+function wantsHistoricalSales(message) {
+  return /\bhistoric[ao]s?\b|\btodas?\s+as\s+vendas\b|\bgeral\b|\binclu(?:i|ir|indo).*(?:distrat|cancel|inativ)/.test(normalizeText(message));
+}
+
+function asksSimpleSalesCount(message) {
+  const normalized = normalizeText(message);
+  return /\bquant[ao]s?\b|\btotal\b|\bqtd\b|\bquantidade\b|\btemos\b/.test(normalized)
+    && /\bvendas?\b/.test(normalized)
+    && !/\bvgv\b|\bvalor\b|\bfaturamento\b|\breceita\b|\bcorretor(?:es)?\b|\bimobiliarias?\b|\bclientes?\b|\bcompradores?\b|\bdistratos?\b|\bcancelamentos?\b|\bstatus\b|\bmotivos?\b/.test(normalized);
+}
+
+function hasOnlySimpleScopeFilters(filters = {}) {
+  const meaningfulKeys = Object.entries(filters)
+    .filter(([, value]) => value != null && String(value).trim() !== '')
+    .map(([key]) => key);
+  return meaningfulKeys.every((key) => ['base', 'Fonte', 'fonte', 'empreendimento', 'bloco'].includes(key));
+}
+
+function formatSalesScope(filters = {}) {
+  const base = filters.base || filters.Fonte || filters.fonte;
+  const parts = [];
+  if (filters.empreendimento) parts.push(`no empreendimento ${filters.empreendimento}`);
+  if (filters.bloco) parts.push(`no bloco ${filters.bloco}`);
+  if (base) parts.push(`na base ${String(base).toUpperCase()}`);
+  if (parts.length > 0) return parts.join(', ');
+  return 'no consolidado';
+}
+
+function pluralizeSale(total) {
+  return Number(total) === 1 ? 'venda' : 'vendas';
+}
+
+function isConsolidatedSalesQuestion(message) {
+  const normalized = normalizeText(message);
+  return /\bvendas?\b|\bcompras?\b|\breservas?\b|\bcontratos?\b|\bclientes?\b|\bcompradores?\b|\bcorretores?\b|\bimobiliarias?\b|\bvgv\b|\bfonte\b|\bbase\b|\btabela\b/.test(normalized)
+    && !isCancellationQuestion(message);
+}
+
+function isCancellationQuestion(message) {
+  return /\bdistratos?\b|\bcancelamentos?\b|\bcancelad[ao]s?\b|\brescis(?:ao|oes)\b|\binativ[ao]s?\b/.test(normalizeText(message));
+}
+
+function normalizeVgvMetric(spec) {
+  if (!spec.metric?.column) return spec;
+  const metricColumn = normalizeText(spec.metric.column);
+  if (/\bvgv\b|valor_vgv|valor total|faturamento|receita|lucro/.test(metricColumn)) {
+    return {
+      ...spec,
+      metric: { ...spec.metric, column: 'Valor_VGV_Correto' },
+    };
+  }
+  return spec;
+}
+
+function addFilterIfMissing(filters, column, operator, value) {
+  const hasColumnFilter = filters.some((filter) => filter.column === column);
+  return hasColumnFilter ? filters : [...filters, { column, operator, value }];
 }
 
 function compareFilterValue(rowValue, operator, expectedValue) {
@@ -171,26 +287,46 @@ function getReferenceRow(rows, metric, metricValue) {
 }
 
 function applyDefaultSemanticQualityRules(spec) {
-  const metricColumn = spec.metric?.column;
+  let nextSpec = normalizeVgvMetric(spec);
+  const tables = Array.isArray(nextSpec.tables) ? nextSpec.tables : [];
+  const usesConsolidatedSales = tables.includes(CONSOLIDATED_SALES_TABLE);
+  const filters = Array.isArray(nextSpec.filters) ? [...nextSpec.filters] : [];
+  const qualityRulesApplied = [];
+
+  if (usesConsolidatedSales && isCancellationQuestion(nextSpec.message)) {
+    nextSpec = {
+      ...nextSpec,
+      filters: addFilterIfMissing(filters, 'Status', 'eq', 'INATIVO'),
+    };
+    qualityRulesApplied.push('Status = INATIVO para distratos/cancelamentos');
+  } else if (usesConsolidatedSales && isConsolidatedSalesQuestion(nextSpec.message) && !wantsHistoricalSales(nextSpec.message)) {
+    nextSpec = {
+      ...nextSpec,
+      filters: addFilterIfMissing(filters, 'Status', 'neq', 'INATIVO'),
+    };
+    qualityRulesApplied.push('Status != INATIVO para vendas ativas');
+  } else {
+    nextSpec = { ...nextSpec, filters };
+  }
+
+  const metricColumn = nextSpec.metric?.column;
   const message = normalizeText(spec.message);
   const shouldProtectPriceMetric = metricColumn === 'valor_total'
     && !/\bgaragem\b|\bvaga\b|\bextra\b|\bbaia\b/.test(message);
 
   if (!shouldProtectPriceMetric) {
-    return { spec, qualityRulesApplied: [] };
+    return { spec: nextSpec, qualityRulesApplied };
   }
 
-  const filters = Array.isArray(spec.filters) ? [...spec.filters] : [];
-  const excludeTerms = Array.isArray(spec.excludeTerms) ? [...spec.excludeTerms] : [];
+  const priceFilters = Array.isArray(nextSpec.filters) ? [...nextSpec.filters] : [];
+  const excludeTerms = Array.isArray(nextSpec.excludeTerms) ? [...nextSpec.excludeTerms] : [];
   const hasMinimumPrice = filters.some((filter) => filter.column === 'valor_total' && ['gte', 'gt'].includes(filter.operator));
   const hasAccessoryExclusion = excludeTerms.some((exclusion) => {
     const terms = Array.isArray(exclusion.terms) ? exclusion.terms.map(normalizeText) : [];
     return ['garagem', 'extra', 'vaga', 'baia'].some((term) => terms.includes(term));
   });
-  const qualityRulesApplied = [];
-
   if (!hasMinimumPrice) {
-    filters.push({ column: 'valor_total', operator: 'gte', value: 50000 });
+    priceFilters.push({ column: 'valor_total', operator: 'gte', value: 50000 });
     qualityRulesApplied.push('valor_total >= 50000');
   }
 
@@ -204,8 +340,8 @@ function applyDefaultSemanticQualityRules(spec) {
 
   return {
     spec: {
-      ...spec,
-      filters,
+      ...nextSpec,
+      filters: priceFilters,
       excludeTerms,
     },
     qualityRulesApplied,
@@ -213,66 +349,13 @@ function applyDefaultSemanticQualityRules(spec) {
 }
 
 async function getStockUnits(filters = {}) {
-  const tipologiaTerms = getTipologiaTerms(filters);
-  const sourceBase = normalizeText(filters.base);
-  const tables = sourceBase === 'vca'
-    ? ['estoque_cvcrm']
-    : sourceBase === 'lotear'
-      ? ['estoque_lotear']
-      : ['estoque_cvcrm', 'estoque_lotear'];
-  let rows = [];
-
-  for (const table of tables) {
-    const tableRows = await fetchAll(
-      table,
-      'idunidade, nome_empreendimento, situacao, tipologia, area_privativa, vagas_garagem, bloco, unidade, situacao_mapa_disponibilidade',
-      (query) => {
-        let next = query;
-        if (filters.empreendimento) next = next.ilike('nome_empreendimento', `%${filters.empreendimento}%`);
-        if (filters.situacao) next = next.ilike('situacao', `%${filters.situacao}%`);
-        if (filters.bloco) next = next.ilike('bloco', `%${filters.bloco}%`);
-        if (filters.unidade) next = next.ilike('unidade', `%${filters.unidade}%`);
-        return next;
-      }
-    );
-
-    rows = rows.concat(tableRows.map((row) => ({
-      ...row,
-      base: table.endsWith('_lotear') ? 'lotear' : 'vca',
-      empreendimento: row.nome_empreendimento,
-    })));
-  }
-
-  return tipologiaTerms.length > 0
-    ? rows.filter((row) => matchesTextTerms(row.tipologia, tipologiaTerms))
-    : rows;
+  void filters;
+  return [];
 }
 
 async function getPriceRows(filters = {}) {
-  const sourceBase = normalizeText(filters.base);
-  const tables = sourceBase === 'vca'
-    ? ['tabela_de_preco_cvcrm']
-    : sourceBase === 'lotear'
-      ? ['tabela_de_preco_lotear']
-      : ['tabela_de_preco_cvcrm', 'tabela_de_preco_lotear'];
-  let rows = [];
-
-  for (const table of tables) {
-    const tableRows = await fetchAll(
-      table,
-      'idunidade, empreendimento, bloco, unidade, area_privativa, valor_total, tabela',
-      (query) => {
-        let next = query;
-        if (filters.empreendimento) next = next.ilike('empreendimento', `%${filters.empreendimento}%`);
-        if (filters.bloco) next = next.ilike('bloco', `%${filters.bloco}%`);
-        if (filters.unidade) next = next.ilike('unidade', `%${filters.unidade}%`);
-        return next;
-      }
-    );
-    rows = rows.concat(tableRows.map((row) => ({ ...row, base: table.endsWith('_lotear') ? 'lotear' : 'vca' })));
-  }
-
-  return rows;
+  void filters;
+  return [];
 }
 
 async function executeCheapestProjectsByPrice(plan) {
@@ -583,10 +666,18 @@ async function executeSemanticAggregate(plan) {
         empreendimento: reference.empreendimento || reference.nome_empreendimento || reference.nome || null,
         bloco: reference.bloco || null,
         unidade: reference.unidade || null,
+        cliente: reference.cliente || null,
+        corretor: reference.corretor || null,
+        imobiliaria: reference.imobiliaria || null,
+        cidade: reference.cidade || null,
         tipologia: reference.tipologia || null,
-        situacao: reference.situacao || reference.situacao_atual || null,
-        valor_total: reference.valor_total ?? null,
-        tabela: reference.tabela || null,
+        situacao: reference.situacao || reference.situacao_atual || reference.Status || null,
+        valor_total: reference.valor_total ?? reference.Valor_VGV_Correto ?? null,
+        vgv: reference.Valor_VGV_Correto ?? null,
+        renda: reference.renda ?? null,
+        tabela: reference.tabela || reference.nomeTabelaAjustado || null,
+        fonte: reference.Fonte || null,
+        motivo_distrato: reference.distrato_motivoDistrato || null,
       } : null,
     };
   });
@@ -617,131 +708,171 @@ async function executeSemanticAggregate(plan) {
   };
 }
 
-async function executeSalesByProject(plan) {
-  const filters = plan.executionSpec.filters;
-  let rows = [];
-  const sourceBase = normalizeText(filters.base);
-  const tables = sourceBase === 'vca'
-    ? ['vendas_cvcrm']
-    : sourceBase === 'lotear'
-      ? ['vendas_lotear']
-      : ['vendas_cvcrm', 'vendas_lotear'];
-  for (const table of tables) {
-    const tableRows = await fetchAll(table, 'numero_reserva, tipo_de_venda, empreendimento, unidade, corretor, imobiliaria', (query) => {
-      let next = query;
-      if (filters.empreendimento) next = next.ilike('empreendimento', `%${filters.empreendimento}%`);
-      if (filters.corretor) next = next.ilike('corretor', `%${filters.corretor}%`);
-      if (filters.imobiliaria) next = next.ilike('imobiliaria', `%${filters.imobiliaria}%`);
-      if (filters.unidade) next = next.ilike('unidade', `%${filters.unidade}%`);
-      return next;
-    });
-    rows = rows.concat(tableRows);
-  }
+function applyTextFilter(query, filters, filterKey, column) {
+  return filters[filterKey] ? query.ilike(column, `%${filters[filterKey]}%`) : query;
+}
 
-  const rankingByProject = summarizeRankingBy(rows, 'empreendimento', 'total_vendas');
+function applyDateFilters(query, filters) {
+  let next = query;
+  const start = filters.dataInicio || filters.data_inicio || filters.dataVendaInicio || filters.data_venda_inicio;
+  const end = filters.dataFim || filters.data_fim || filters.dataVendaFim || filters.data_venda_fim;
+  if (start) next = next.gte('dataVenda', start);
+  if (end) next = next.lte('dataVenda', end);
+  return next;
+}
+
+function applyConsolidatedSalesFilters(query, filters = {}) {
+  let next = query;
+  next = applyTextFilter(next, filters, 'empreendimento', 'empreendimento');
+  next = applyTextFilter(next, filters, 'cliente', 'cliente');
+  next = applyTextFilter(next, filters, 'titular', 'cliente');
+  next = applyTextFilter(next, filters, 'corretor', 'corretor');
+  next = applyTextFilter(next, filters, 'imobiliaria', 'imobiliaria');
+  next = applyTextFilter(next, filters, 'unidade', 'unidade');
+  next = applyTextFilter(next, filters, 'bloco', 'bloco');
+  next = applyTextFilter(next, filters, 'etapa', 'etapa');
+  next = applyTextFilter(next, filters, 'cidade', 'cidade');
+  next = applyTextFilter(next, filters, 'tabela', 'nomeTabelaAjustado');
+  next = applyTextFilter(next, filters, 'nomeTabelaAjustado', 'nomeTabelaAjustado');
+
+  const fonte = filters.Fonte || filters.fonte || filters.base;
+  if (fonte) next = next.ilike('Fonte', `%${fonte}%`);
+
+  return applyDateFilters(next, filters);
+}
+
+async function getConsolidatedSalesRows(filters = {}, options = {}) {
+  const includeInactive = options.includeInactive === true;
+  const onlyInactive = options.onlyInactive === true;
+
+  return fetchAll(
+    CONSOLIDATED_SALES_TABLE,
+    CONSOLIDATED_SALES_COLUMNS,
+    (query) => {
+      let next = applyConsolidatedSalesFilters(query, filters);
+      if (onlyInactive) {
+        next = next.eq('Status', 'INATIVO');
+      } else if (!includeInactive) {
+        next = next.or('Status.is.null,Status.neq.INATIVO');
+      }
+      return next;
+    }
+  );
+}
+
+function mapConsolidatedSample(row) {
+  return {
+    referencia: row.referencia,
+    dataVenda: row.dataVenda,
+    cliente: row.cliente,
+    empreendimento: row.empreendimento,
+    etapa: row.etapa,
+    bloco: row.bloco,
+    unidade: row.unidade,
+    cidade: row.cidade,
+    corretor: row.corretor,
+    imobiliaria: row.imobiliaria,
+    estadoCivil: row.estadoCivil,
+    sexo: row.sexo,
+    renda: row.renda,
+    nomeTabelaAjustado: row.nomeTabelaAjustado,
+    Fonte: row.Fonte,
+    Status: row.Status,
+    distrato_motivoDistrato: row.distrato_motivoDistrato,
+    Valor_VGV_Correto: row.Valor_VGV_Correto,
+  };
+}
+
+async function executeSalesByProject(plan) {
+  const filters = plan.executionSpec.filters || {};
+  const includeInactive = wantsHistoricalSales(plan.executionSpec.message || '');
+  const rows = await getConsolidatedSalesRows(filters, { includeInactive });
+  const activeRows = rows.filter((row) => !isCancellationStatus(row.Status));
+  const cancelledRows = rows.filter((row) => isCancellationStatus(row.Status));
+  const rowsForRanking = includeInactive ? rows : activeRows;
+
+  const rankingByProject = summarizeRankingBy(rowsForRanking, 'empreendimento', 'total_vendas');
+  const shouldUseDirectAnswer = !includeInactive
+    && asksSimpleSalesCount(plan.executionSpec.message || '')
+    && hasOnlySimpleScopeFilters(filters);
+  const directAnswer = shouldUseDirectAnswer
+    ? `Au au! Boa, vamos pra cima: ${formatSalesScope(filters).replace(/^./, (char) => char.toUpperCase())}, temos ${rowsForRanking.length} ${pluralizeSale(rowsForRanking.length)}.`
+    : null;
 
   return {
     type: 'sales_summary',
+    direct_answer: directAnswer,
+    response_guidance: shouldUseDirectAnswer
+      ? 'Responda apenas a direct_answer. Nao mencione status, tabela, colunas, filtros tecnicos, VGV ou cancelamentos.'
+      : null,
+    source_table: CONSOLIDATED_SALES_TABLE,
+    default_rule: includeInactive ? 'historico_completo' : 'vendas_ativas_Status_diferente_de_INATIVO',
     filters,
-    total: rows.length,
-    counts_by_sale_type: summarizeBy(rows, 'tipo_de_venda'),
-    counts_by_project: summarizeBy(rows, 'empreendimento'),
+    total: rowsForRanking.length,
+    total_active_sales: activeRows.length,
+    total_cancelled_or_distracted: cancelledRows.length,
+    total_vgv_correto: summarizeNumeric(rowsForRanking, 'Valor_VGV_Correto').total,
+    avg_vgv_correto: summarizeNumeric(rowsForRanking, 'Valor_VGV_Correto').average,
+    avg_renda: summarizeNumeric(rowsForRanking, 'renda').average,
+    counts_by_status: summarizeBy(rows, 'Status'),
+    counts_by_source: summarizeBy(rowsForRanking, 'Fonte'),
+    counts_by_table: summarizeBy(rowsForRanking, 'nomeTabelaAjustado'),
+    counts_by_gender: summarizeBy(rowsForRanking, 'sexo'),
+    counts_by_marital_status: summarizeBy(rowsForRanking, 'estadoCivil'),
+    counts_by_project: summarizeBy(rowsForRanking, 'empreendimento'),
+    ranking_by_corretor: summarizeRankingBy(rowsForRanking, 'corretor', 'total_vendas'),
+    ranking_by_imobiliaria: summarizeRankingBy(rowsForRanking, 'imobiliaria', 'total_vendas'),
+    ranking_by_city: summarizeRankingBy(rowsForRanking, 'cidade', 'total_vendas'),
+    ranking_by_source: summarizeRankingBy(rowsForRanking, 'Fonte', 'total_vendas'),
+    ranking_by_table: summarizeRankingBy(rowsForRanking, 'nomeTabelaAjustado', 'total_vendas'),
+    ranking_vgv_by_project: summarizeNumericBy(rowsForRanking, 'empreendimento', 'Valor_VGV_Correto', 'vgv_total'),
+    ranking_vgv_by_corretor: summarizeNumericBy(rowsForRanking, 'corretor', 'Valor_VGV_Correto', 'vgv_total'),
     ranking_by_project: rankingByProject,
     top_project_by_sales: rankingByProject[0] || null,
-    sample: rows.slice(0, 30),
+    sample: rowsForRanking.slice(0, 30).map(mapConsolidatedSample),
   };
 }
 
 async function executeCancellationsByProject(plan) {
-  const filters = plan.executionSpec.filters;
-  let rows = [];
-  const sourceBase = normalizeText(filters.base);
-  const tables = sourceBase === 'vca'
-    ? ['distratos_cvcrm']
-    : sourceBase === 'lotear'
-      ? ['distratos_lotear']
-      : ['distratos_cvcrm', 'distratos_lotear'];
-  for (const table of tables) {
-    const tableRows = await fetchAll(table, 'id_distrato, id_reserva, situacao_atual, empreendimento, bloco, unidade', (query) => {
-      let next = query;
-      if (filters.empreendimento) next = next.ilike('empreendimento', `%${filters.empreendimento}%`);
-      if (filters.situacao) next = next.ilike('situacao_atual', `%${filters.situacao}%`);
-      return next;
-    });
-    rows = rows.concat(tableRows);
-  }
+  const filters = plan.executionSpec.filters || {};
+  const rows = await getConsolidatedSalesRows(filters, { onlyInactive: true });
 
   const rankingByProject = summarizeRankingBy(rows, 'empreendimento', 'total_distratos');
 
   return {
     type: 'cancellations_summary',
+    source_table: CONSOLIDATED_SALES_TABLE,
+    default_rule: 'Status_INATIVO',
     filters,
     total: rows.length,
-    counts_by_status: summarizeBy(rows, 'situacao_atual'),
+    total_vgv_correto: summarizeNumeric(rows, 'Valor_VGV_Correto').total,
+    avg_vgv_correto: summarizeNumeric(rows, 'Valor_VGV_Correto').average,
+    counts_by_status: summarizeBy(rows, 'Status'),
+    counts_by_reason: summarizeBy(rows, 'distrato_motivoDistrato'),
+    counts_by_source: summarizeBy(rows, 'Fonte'),
     counts_by_project: summarizeBy(rows, 'empreendimento'),
     ranking_by_project: rankingByProject,
+    ranking_by_corretor: summarizeRankingBy(rows, 'corretor', 'total_distratos'),
+    ranking_by_imobiliaria: summarizeRankingBy(rows, 'imobiliaria', 'total_distratos'),
+    ranking_by_reason: summarizeRankingBy(rows, 'distrato_motivoDistrato', 'total_distratos'),
+    ranking_vgv_by_project: summarizeNumericBy(rows, 'empreendimento', 'Valor_VGV_Correto', 'vgv_total'),
     top_project_by_cancellations: rankingByProject[0] || null,
-    sample: rows.slice(0, 30),
+    sample: rows.slice(0, 30).map(mapConsolidatedSample),
   };
 }
 
 async function executeLeadsSummary(plan) {
-  const filters = plan.executionSpec.filters;
-  const rows = await fetchAll('TB_LEADS', 'idlead, situacao, empreendimento, origem, origem_ultimo, corretor, imobiliaria', (query) => {
-    let next = query;
-    if (filters.empreendimento) next = next.ilike('empreendimento', `%${filters.empreendimento}%`);
-    if (filters.corretor) next = next.ilike('corretor', `%${filters.corretor}%`);
-    if (filters.situacao) next = next.ilike('situacao', `%${filters.situacao}%`);
-    return next;
-  });
-
-  return {
-    type: 'leads_summary',
-    filters,
-    total: rows.length,
-    counts_by_status: summarizeBy(rows, 'situacao'),
-    counts_by_origin: summarizeBy(rows, 'origem'),
-    sample: rows.slice(0, 30),
-  };
+  void plan;
+  return consolidatedOnlyLimit('leads');
 }
 
 async function executePrecadastrosSummary(plan) {
-  const filters = plan.executionSpec.filters;
-  let rows = [];
-  for (const table of ['TB_PRECADASTROS', 'TB_PRECADASTROS_LOT']) {
-    const tableRows = await fetchAll(table, 'idprecadastro, situacao, empreendimento, unidade, corretor, imobiliaria, valor_total', (query) => {
-      let next = query;
-      if (filters.empreendimento) next = next.ilike('empreendimento', `%${filters.empreendimento}%`);
-      if (filters.corretor) next = next.ilike('corretor', `%${filters.corretor}%`);
-      if (filters.situacao) next = next.ilike('situacao', `%${filters.situacao}%`);
-      return next;
-    });
-    rows = rows.concat(tableRows);
-  }
-
-  return {
-    type: 'precadastros_summary',
-    filters,
-    total: rows.length,
-    counts_by_status: summarizeBy(rows, 'situacao'),
-    counts_by_project: summarizeBy(rows, 'empreendimento'),
-    sample: rows.slice(0, 30),
-  };
+  void plan;
+  return consolidatedOnlyLimit('pre-cadastros');
 }
 
 async function executeGeneralOverview() {
-  const [stock, prices] = await Promise.all([
-    executeStockByProject({ executionSpec: { filters: {} } }),
-    executePriceByProject({ executionSpec: { filters: {} } }),
-  ]);
-
-  return {
-    type: 'general_commercial_overview',
-    stock_total: stock.total,
-    stock_by_status: stock.counts_by_status,
-    price_total: prices.total_unidades,
-    cheapest_units: prices.menores_precos.slice(0, 10),
-  };
+  return consolidatedOnlyLimit('visao geral antiga');
 }
 
 async function executePlan(plan) {
@@ -774,22 +905,22 @@ async function executePlan(plan) {
       );
       break;
     case 'cheapest_unit_by_typology':
-      answerPayload = await executeCheapestUnitByTypology(plan);
+      answerPayload = consolidatedOnlyLimit('estoque/tabela de preco');
       break;
     case 'cheapest_projects_by_price':
-      answerPayload = await executeCheapestProjectsByPrice(plan);
+      answerPayload = consolidatedOnlyLimit('tabela de preco');
       break;
     case 'cheapest_project_by_base':
-      answerPayload = await executeCheapestProjectByBase(plan);
+      answerPayload = consolidatedOnlyLimit('tabela de preco');
       break;
     case 'stock_by_project':
-      answerPayload = await executeStockByProject(plan);
+      answerPayload = consolidatedOnlyLimit('estoque');
       break;
     case 'unit_typology_lookup':
-      answerPayload = await executeUnitTypologyLookup(plan);
+      answerPayload = consolidatedOnlyLimit('estoque/tipologia');
       break;
     case 'price_by_project':
-      answerPayload = await executePriceByProject(plan);
+      answerPayload = consolidatedOnlyLimit('tabela de preco');
       break;
     case 'semantic_aggregate':
       answerPayload = await executeSemanticAggregate(plan);
@@ -801,10 +932,10 @@ async function executePlan(plan) {
       answerPayload = await executeCancellationsByProject(plan);
       break;
     case 'leads_summary':
-      answerPayload = await executeLeadsSummary(plan);
+      answerPayload = consolidatedOnlyLimit('leads');
       break;
     case 'precadastros_summary':
-      answerPayload = await executePrecadastrosSummary(plan);
+      answerPayload = consolidatedOnlyLimit('pre-cadastros');
       break;
     case 'general_commercial_overview':
       answerPayload = await executeGeneralOverview(plan);

@@ -7,14 +7,14 @@ function run() {
   const schemaProfile = {
     tables: [
       {
-        table: 'tabela_de_preco_cvcrm',
+        table: 'vw_Vendas_Consolidada',
         available: true,
         columns: [
           { name: 'empreendimento' },
-          { name: 'valor_total' },
+          { name: 'Valor_VGV_Correto' },
           { name: 'bloco' },
           { name: 'unidade' },
-          { name: 'tabela' },
+          { name: 'cliente' },
         ],
       },
     ],
@@ -28,12 +28,12 @@ function run() {
   };
 
   const validated = validateQueryPlan({
-    planId: 'price_by_project',
+    planId: 'semantic_aggregate',
     confidence: 0.82,
     executionSpec: {
-      tables: ['tabela_de_preco_cvcrm'],
+      tables: ['vw_Vendas_Consolidada'],
       groupBy: ['empreendimento'],
-      metric: { function: 'avg', column: 'valor_total' },
+      metric: { function: 'sum', column: 'Valor_VGV_Correto' },
       order: { by: 'metric', direction: 'asc' },
       limit: 3,
     },
@@ -41,15 +41,15 @@ function run() {
 
   assert.equal(validated.ok, true);
   assert.equal(validated.plan.planId, 'semantic_aggregate');
-  assert.deepEqual(validated.plan.requiredPermissions, ['view_tabela_preco']);
+  assert.ok(validated.plan.requiredPermissions.includes('view_reservas'));
   assert.equal(validated.plan.executionSpec.limit, 3);
 
   const rejected = validateQueryPlan({
     planId: 'semantic_aggregate',
     executionSpec: {
-      tables: ['tabela_de_preco_cvcrm'],
+      tables: ['vw_Vendas_Consolidada'],
       groupBy: ['coluna_inexistente'],
-      metric: { function: 'avg', column: 'valor_total' },
+      metric: { function: 'sum', column: 'Valor_VGV_Correto' },
     },
   }, schemaProfile, fallbackPlan);
 

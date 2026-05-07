@@ -54,6 +54,26 @@ function buildPlan(planId, message, entities, confidence, missingFields = []) {
   };
 }
 
+function buildSemanticPlan(message, executionSpec, confidence = 0.9) {
+  return {
+    planId: 'semantic_aggregate',
+    requiredPermissions: collectPermissions('sales_by_project'),
+    missingFields: [],
+    confidence,
+    executionSpec: {
+      message,
+      tables: ['vw_Vendas_Consolidada'],
+      filters: [],
+      groupBy: [],
+      metric: { function: 'count' },
+      order: { by: 'metric', direction: 'desc' },
+      limit: 10,
+      outputType: 'summary',
+      ...executionSpec,
+    },
+  };
+}
+
 function splitQuestionItems(message) {
   return String(message || '')
     .split(/\r?\n/)
@@ -71,19 +91,121 @@ function parseUnitReference(message) {
   };
 }
 
+function parseBlockFromMessage(message) {
+  const normalized = normalizeText(message);
+  const match = normalized.match(/\b(?:bloco|bl|torre)\s*([a-z0-9-]+)\b/);
+  if (!match) return null;
+  return match[1].toUpperCase();
+}
+
+function parseBaseFromMessage(message) {
+  const normalized = normalizeText(message);
+  if (/\bbase\s+vca\b|\bfonte\s+vca\b|\bvca\b|\bcvcrm\b/.test(normalized)) return 'vca';
+  if (/\bbase\s+lotear\b|\bfonte\s+lotear\b|\blotear\b/.test(normalized)) return 'lotear';
+  return null;
+}
+
+function canonicalProjectName(value) {
+  if (!value) return null;
+  const normalized = normalizeText(value);
+  if (normalized.includes('uni ville')) return 'UNI VILLE RESIDENCIAL';
+  return String(value).trim();
+}
+
+function cleanProjectCandidate(candidate) {
+  const cleaned = String(candidate || '').trim().replace(/[?.:,;]+$/, '');
+  if (!cleaned) return null;
+  if (/^(?:base|fonte|vca|cvcrm|lotear|bloco|bl|torre|unidade|apto|apartamento)\b/i.test(cleaned)) return null;
+  return canonicalProjectName(cleaned);
+}
+
+function isPhraseMistakenAsProject(value) {
+  const normalized = normalizeText(value);
+  if (/^(?:bloco|bl|torre|unidade|apto|apartamento)\s*[a-z0-9-]+\b/.test(normalized)) return true;
+  return /^(?:base|fonte)\s+(?:vca|cvcrm|lotear)\b/.test(normalized)
+    || /^(?:vca|cvcrm|lotear)(?:\s+(?:nos?|nós)?\s*temos|\s+hoje|\s+atual)/.test(normalized);
+}
+
+function sanitizeEntitiesForPlanning(message, entities = {}) {
+  const inferredBase = parseBaseFromMessage(message);
+  const sanitized = { ...entities };
+
+  if (isPhraseMistakenAsProject(sanitized.empreendimento)) {
+    delete sanitized.empreendimento;
+  }
+
+  if (inferredBase && !sanitized.base) {
+    sanitized.base = inferredBase;
+  }
+
+  if (sanitized.empreendimento) {
+    sanitized.empreendimento = canonicalProjectName(sanitized.empreendimento);
+  }
+
+  return sanitized;
+}
+
+function extractConversationContext(conversationHistory = []) {
+  let latestBase = null;
+  const history = Array.isArray(conversationHistory) ? [...conversationHistory].reverse() : [];
+
+  for (const message of history) {
+    const content = message?.content || '';
+    if (!content) continue;
+
+    const project = extractProjectFromMessage(content);
+    const base = parseBaseFromMessage(content);
+    const block = parseBlockFromMessage(content);
+    if (project) {
+      return {
+        empreendimento: project,
+        ...(base ? { base } : {}),
+        ...(block ? { bloco: block } : {}),
+      };
+    }
+
+    if (!latestBase && base) latestBase = base;
+  }
+
+  return latestBase ? { base: latestBase } : {};
+}
+
+function shouldInheritConversationScope(message, entities = {}) {
+  const normalized = normalizeText(message);
+  const hasLocalScope = hasEntity(entities, 'empreendimento') || hasEntity(entities, 'base');
+  const isScopedFollowUp = /\bbloco\b|\bbl\b|\btorre\b|\bunidades?\b|\bapto\b|\bapartamentos?\b|\betapa\b/.test(normalized);
+  const isCommercialQuestion = /\bvendas?\b|\bcompras?\b|\bcompraram\b|\bcomprad(?:or|ores|ora|oras)\b|\bclientes?\b|\breservas?\b|\bcontratos?\b|\bdistratos?\b|\bcancelamentos?\b/.test(normalized);
+  return !hasLocalScope && isScopedFollowUp && isCommercialQuestion;
+}
+
+function enrichEntitiesWithConversationContext(message, entities = {}, conversationHistory = []) {
+  const current = sanitizeEntitiesForPlanning(message, entities);
+  const block = parseBlockFromMessage(message);
+  if (block && !current.bloco) current.bloco = block;
+
+  if (!shouldInheritConversationScope(message, current)) return current;
+
+  const context = extractConversationContext(conversationHistory);
+  return {
+    ...current,
+    ...(context.empreendimento && !current.empreendimento ? { empreendimento: context.empreendimento } : {}),
+    ...(context.base && !current.base ? { base: context.base } : {}),
+    ...(context.bloco && !current.bloco ? { bloco: context.bloco } : {}),
+  };
+}
+
 function extractProjectFromMessage(message) {
   const text = String(message || '').trim();
   const direct = text.match(/\bempreendimento\s+(.+)$/i);
   if (direct?.[1] && !/^(?:com|que|mais|maior|menor)\b/i.test(direct[1].trim())) {
-    return direct[1].trim().replace(/[?.:,;]+$/, '');
+    return cleanProjectCandidate(direct[1]);
   }
 
   const afterPreposition = text.match(/\b(?:do|da|no|na)\s+(.+)$/i);
   if (afterPreposition?.[1] && !/^(?:tipologia|base|unidade)\b/i.test(afterPreposition[1].trim())) {
-    return afterPreposition[1]
+    return cleanProjectCandidate(afterPreposition[1]
       .replace(/\b(?:na|no|da|do)\s+base\b.*$/i, '')
-      .trim()
-      .replace(/[?.:,;]+$/, '');
+      .trim());
   }
 
   return null;
@@ -92,6 +214,7 @@ function extractProjectFromMessage(message) {
 function planSingleQuery({ message, userRole, intents = [], entities = {} }) {
   const normalized = normalizeText(message);
   const actionTerms = BUSINESS_CATALOG.operationalActions;
+  const sanitizedEntities = sanitizeEntitiesForPlanning(message, entities);
 
   if (hasAny(normalized, actionTerms)) {
     return buildPlan('action_not_supported', message, entities, 0.98);
@@ -106,16 +229,51 @@ function planSingleQuery({ message, userRole, intents = [], entities = {} }) {
   const mentionsProjectRanking = hasAny(normalized, ['empreendimento', 'empreendimentos', 'obra', 'obras', 'projeto', 'projetos']);
   const asksEachBase = /\bcada\s+base\b|\bpor\s+base\b|\bpor\s+cada\s+base\b|\bvca\s+e\s+lotear\b|\blotear\s+e\s+vca\b/.test(normalized);
   const asksMost = /\bmais\b|\bmaior\b|\bmaiores\b|\btop\b|\branking\b/.test(normalized);
+  const mentionsSales = hasIntent(intents, 'reservas')
+    || /\bvendas?\b|\bcompras?\b|\breservas?\b|\bcontratos?\b|\bcompradores?\b|\btitulares?\b|\bclientes?\b|\bcorretor(?:es)?\b|\bimobiliarias?\b|\bvgv\b/.test(normalized);
+  const mentionsCancellation = hasIntent(intents, 'distratos') || hasAny(normalized, BUSINESS_CATALOG.concepts.distratos.synonyms);
+  const mentionsVgv = /\bvgv\b|\blucro\b|\breceita\b|\bvalor\s+(?:total|vendido|de venda)\b|\bfaturamento\b/.test(normalized);
   const hasTypology = hasEntity(entities, 'tipologia')
     || hasEntity(entities, 'pavimento')
     || (Array.isArray(entities.tipologia_terms) && entities.tipologia_terms.length > 0);
 
   const inferredProject = extractProjectFromMessage(message);
-  const inferredEntities = inferredProject && !entities.empreendimento
-    ? { ...entities, empreendimento: inferredProject }
-    : entities;
+  const inferredBase = parseBaseFromMessage(message);
+  const inferredBlock = parseBlockFromMessage(message);
+  const inferredEntities = {
+    ...sanitizedEntities,
+    ...(inferredProject && !sanitizedEntities.empreendimento ? { empreendimento: inferredProject } : {}),
+    ...(inferredBase && !sanitizedEntities.base ? { base: inferredBase } : {}),
+    ...(inferredBlock && !sanitizedEntities.bloco ? { bloco: inferredBlock } : {}),
+  };
 
-  if (asksCheapest && asksEachBase && mentionsProjectRanking && mentionsPrice) {
+  if (mentionsCancellation && hasAny(normalized, ['motivo', 'motivos'])) {
+    return buildSemanticPlan(message, {
+      filters: [{ column: 'Status', operator: 'eq', value: 'INATIVO' }],
+      groupBy: ['distrato_motivoDistrato'],
+      metric: { function: 'count' },
+      order: { by: 'metric', direction: 'desc' },
+      limit: inferredEntities.limit || 10,
+      outputType: 'ranking',
+    }, 0.9);
+  }
+
+  if (mentionsVgv && mentionsSales) {
+    return buildSemanticPlan(message, {
+      filters: [{ column: 'Status', operator: 'neq', value: 'INATIVO' }],
+      groupBy: hasAny(normalized, ['empreendimento', 'obra', 'projeto']) ? ['empreendimento'] : [],
+      metric: { function: 'sum', column: 'Valor_VGV_Correto' },
+      order: { by: 'metric', direction: 'desc' },
+      limit: inferredEntities.limit || 10,
+      outputType: 'ranking',
+    }, 0.92);
+  }
+
+  if (mentionsSales) {
+    return buildPlan('sales_by_project', message, inferredEntities, hasEntity(inferredEntities, 'empreendimento') ? 0.9 : 0.8);
+  }
+
+  if (asksCheapest && asksEachBase && mentionsProjectRanking && mentionsPrice && !mentionsSales) {
     return buildPlan('cheapest_project_by_base', message, { ...inferredEntities, limit: 1 }, 0.96);
   }
 
@@ -150,7 +308,7 @@ function planSingleQuery({ message, userRole, intents = [], entities = {} }) {
     return buildPlan('stock_by_project', message, nextEntities, 0.9);
   }
 
-  if ((asksRanking || asksCheapest) && mentionsProjectRanking && mentionsPrice) {
+  if ((asksRanking || asksCheapest) && mentionsProjectRanking && mentionsPrice && !mentionsSales) {
     const limitMatch = normalized.match(/\btop\s*(\d+)\b/);
     const nextEntities = {
       ...inferredEntities,
@@ -161,7 +319,7 @@ function planSingleQuery({ message, userRole, intents = [], entities = {} }) {
     return buildPlan('cheapest_projects_by_price', message, nextEntities, 0.93);
   }
 
-  if ((asksCheapest || mentionsPrice) && mentionsStock && hasTypology) {
+  if ((asksCheapest || mentionsPrice) && mentionsStock && hasTypology && !mentionsSales) {
     const missing = [];
     if (!hasEntity(inferredEntities, 'empreendimento')) missing.push('empreendimento');
     return buildPlan('cheapest_unit_by_typology', message, inferredEntities, missing.length ? 0.65 : 0.95, missing);
@@ -175,15 +333,11 @@ function planSingleQuery({ message, userRole, intents = [], entities = {} }) {
     return buildPlan('stock_by_project', message, inferredEntities, hasEntity(inferredEntities, 'empreendimento') ? 0.9 : 0.75);
   }
 
-  if (mentionsPrice) {
+  if (mentionsPrice && !mentionsSales) {
     return buildPlan('price_by_project', message, inferredEntities, hasEntity(inferredEntities, 'empreendimento') ? 0.88 : 0.72);
   }
 
-  if (hasIntent(intents, 'reservas') || hasAny(normalized, BUSINESS_CATALOG.concepts.vendas.synonyms)) {
-    return buildPlan('sales_by_project', message, inferredEntities, hasEntity(inferredEntities, 'empreendimento') ? 0.88 : 0.75);
-  }
-
-  if (hasIntent(intents, 'distratos') || hasAny(normalized, BUSINESS_CATALOG.concepts.distratos.synonyms)) {
+  if (mentionsCancellation) {
     return buildPlan('cancellations_by_project', message, inferredEntities, hasEntity(inferredEntities, 'empreendimento') ? 0.9 : 0.78);
   }
 
@@ -202,7 +356,8 @@ function planSingleQuery({ message, userRole, intents = [], entities = {} }) {
   return buildPlan('not_answerable', message, inferredEntities, 0.4);
 }
 
-function planQuery({ message, userRole, intents = [], entities = {} }) {
+function planQuery({ message, userRole, intents = [], entities = {}, conversationHistory = [] }) {
+  const contextualEntities = enrichEntitiesWithConversationContext(message, entities, conversationHistory);
   const items = splitQuestionItems(message);
   if (items.length >= 2) {
     const subPlans = items.map((item) => planSingleQuery({
@@ -220,17 +375,17 @@ function planQuery({ message, userRole, intents = [], entities = {} }) {
       confidence: Math.min(...subPlans.map((plan) => plan.confidence || 0.5)),
       executionSpec: {
         message,
-        filters: entities || {},
+        filters: contextualEntities || {},
         subPlans,
       },
     };
   }
 
-  return planSingleQuery({ message, userRole, intents, entities });
+  return planSingleQuery({ message, userRole, intents, entities: contextualEntities });
 }
 
-async function buildQueryPlan({ message, userRole, intents = [], entities = {} }) {
-  const deterministicPlan = planQuery({ message, userRole, intents, entities });
+async function buildQueryPlan({ message, userRole, intents = [], entities = {}, conversationHistory = [] }) {
+  const deterministicPlan = planQuery({ message, userRole, intents, entities, conversationHistory });
   const { generateSemanticPlan } = require('./semanticQueryPlanner');
   return generateSemanticPlan({
     message,

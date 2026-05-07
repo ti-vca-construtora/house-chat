@@ -18,7 +18,7 @@ let SYSTEM_PROMPT = '';
 try {
   SYSTEM_PROMPT = fs.readFileSync(systemPromptPath, 'utf-8');
 } catch {
-  SYSTEM_PROMPT = 'Voce e o House Bot, assistente da VCA Construtora. Responda em portugues brasileiro, de forma natural, direta e comercial.';
+  SYSTEM_PROMPT = 'Voce e o House Bot, assistente da VCA Construtora. Responda em portugues brasileiro, de forma natural, direta, comercial, extrovertida e energica. Inclua uma imitacao amigavel de cachorro no inicio ou final de toda resposta, como "Au au!".';
 }
 
 function sleep(ms) {

@@ -4,6 +4,11 @@ const supabaseService = require('../services/supabaseService');
 const openAIService = require('../services/openAIService');
 const { buildQueryPlan } = require('../services/queryPlanner');
 
+function getDirectAnswer(contextData) {
+  const answer = contextData?.answer_payload?.direct_answer;
+  return typeof answer === 'string' && answer.trim() ? answer.trim() : null;
+}
+
 async function sendMessage(req, res, next) {
   try {
     const { message, conversationId } = req.body;
@@ -15,6 +20,9 @@ async function sendMessage(req, res, next) {
     }
 
     const trimmed = message.trim();
+    const priorHistory = conversationId
+      ? await supabaseService.getMessages(conversationId, userId).catch(() => [])
+      : [];
 
     // ── Layer 1: verificação rápida por keywords (sem chamar IA) ─────────────
     if (userRole !== 'admin') {
@@ -33,7 +41,13 @@ async function sendMessage(req, res, next) {
 
     // 1. Classificar intenção da pergunta via OpenAI
     const { intents, intent, permissions, entities } = await classifyMessage(trimmed);
-    const queryPlan = await buildQueryPlan({ message: trimmed, userRole, intents, entities });
+    const queryPlan = await buildQueryPlan({
+      message: trimmed,
+      userRole,
+      intents,
+      entities,
+      conversationHistory: priorHistory,
+    });
     const requiredPermissions = queryPlan.requiredPermissions.length > 0
       ? queryPlan.requiredPermissions
       : permissions;
@@ -76,6 +90,16 @@ async function sendMessage(req, res, next) {
     });
 
     // 6. Pegar histórico recente da conversa (últimas 10 mensagens)
+    const directAnswer = getDirectAnswer(contextData);
+    if (directAnswer) {
+      await supabaseService.saveMessage(convId, 'assistant', directAnswer);
+      await supabaseService.incrementMessageCount(userId);
+      if (!conversationId) {
+        await supabaseService.updateConversationTitle(convId, trimmed.slice(0, 60));
+      }
+      return res.json({ conversationId: convId, response: directAnswer });
+    }
+
     const history = await supabaseService.getMessages(convId, userId);
     const recentHistory = history.slice(-10);
 

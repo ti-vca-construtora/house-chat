@@ -71,12 +71,121 @@ function run() {
     intents: ['reservas'],
     entities: { empreendimento: 'Uni Ville' },
   }).planId, 'sales_by_project');
+  const salesPlan = planQuery({
+    message: 'Quantas vendas tem no Uni Ville?',
+    intents: ['reservas'],
+    entities: { empreendimento: 'Uni Ville' },
+  });
+  assert.equal(salesPlan.planId, 'sales_by_project');
+  assert.ok(salesPlan.requiredPermissions.includes('view_reservas'));
 
-  assert.equal(planQuery({
+  const salesByFontePlan = planQuery({
+    message: 'quantas vendas na base VCA nos temos hoje?',
+    intents: ['reservas'],
+    entities: {},
+  });
+  assert.equal(salesByFontePlan.planId, 'sales_by_project');
+  assert.equal(salesByFontePlan.executionSpec.filters.base, 'vca');
+  assert.equal(salesByFontePlan.executionSpec.filters.empreendimento, undefined);
+
+  const salesByFonteWithBadProjectPlan = planQuery({
+    message: 'quantas vendas na base VCA nos temos hoje?',
+    intents: ['reservas'],
+    entities: { empreendimento: 'Base Vca Nos Temos Hoje' },
+  });
+  assert.equal(salesByFonteWithBadProjectPlan.planId, 'sales_by_project');
+  assert.equal(salesByFonteWithBadProjectPlan.executionSpec.filters.base, 'vca');
+  assert.equal(salesByFonteWithBadProjectPlan.executionSpec.filters.empreendimento, undefined);
+
+  const salesByBlockWithContextPlan = planQuery({
+    message: 'Quantidade de vendas no bloco 16',
+    intents: ['reservas'],
+    entities: {},
+    conversationHistory: [
+      { role: 'user', content: 'Quantas vendas do empreendimento UNI VILLE?' },
+      { role: 'assistant', content: 'No empreendimento UNI VILLE, temos 437 vendas.' },
+    ],
+  });
+  assert.equal(salesByBlockWithContextPlan.planId, 'sales_by_project');
+  assert.equal(salesByBlockWithContextPlan.executionSpec.filters.empreendimento, 'UNI VILLE RESIDENCIAL');
+  assert.equal(salesByBlockWithContextPlan.executionSpec.filters.bloco, '16');
+
+  const salesByBlockWithBadProjectEntityPlan = planQuery({
+    message: 'Quantas vendas temos do bloco 16?',
+    intents: ['reservas'],
+    entities: { empreendimento: 'Bloco 16' },
+    conversationHistory: [
+      { role: 'user', content: 'Quantas vendas temos no empreendimento UNI VILLE?' },
+      { role: 'assistant', content: 'Boa. No empreendimento UNI VILLE RESIDENCIAL, temos 437 vendas.' },
+    ],
+  });
+  assert.equal(salesByBlockWithBadProjectEntityPlan.planId, 'sales_by_project');
+  assert.equal(salesByBlockWithBadProjectEntityPlan.executionSpec.filters.empreendimento, 'UNI VILLE RESIDENCIAL');
+  assert.equal(salesByBlockWithBadProjectEntityPlan.executionSpec.filters.bloco, '16');
+
+  const salesByBlockWithProjectContextDoesNotInheritOldBase = planQuery({
+    message: 'Quantas vendas temos do bloco 16?',
+    intents: ['reservas'],
+    entities: { empreendimento: 'Bloco 16' },
+    conversationHistory: [
+      { role: 'user', content: 'e quantas vendas eu tenho atualmente na base VCA?' },
+      { role: 'assistant', content: 'Boa. Na base VCA, temos 17958 vendas.' },
+      { role: 'user', content: 'Quantas vendas temos no empreendimento UNI VILLE?' },
+      { role: 'assistant', content: 'Boa. No empreendimento UNI VILLE RESIDENCIAL, temos 437 vendas.' },
+    ],
+  });
+  assert.equal(salesByBlockWithProjectContextDoesNotInheritOldBase.executionSpec.filters.empreendimento, 'UNI VILLE RESIDENCIAL');
+  assert.equal(salesByBlockWithProjectContextDoesNotInheritOldBase.executionSpec.filters.base, undefined);
+
+  const purchasedUnitsAndClientsPlan = planQuery({
+    message: 'Quais as unidades e qual o nome dos clientes que compraram?',
+    intents: ['estoque', 'clientes'],
+    entities: {},
+    conversationHistory: [
+      { role: 'user', content: 'Quantas vendas temos no empreendimento UNI VILLE?' },
+      { role: 'assistant', content: 'Au au! Boa, vamos pra cima: No empreendimento UNI VILLE RESIDENCIAL, temos 437 vendas.' },
+      { role: 'user', content: 'Quantas vendas temos do bloco 16?' },
+      { role: 'assistant', content: 'Au au! Boa, vamos pra cima: No empreendimento UNI VILLE RESIDENCIAL, no bloco 16, temos 11 vendas.' },
+    ],
+  });
+  assert.equal(purchasedUnitsAndClientsPlan.planId, 'sales_by_project');
+  assert.equal(purchasedUnitsAndClientsPlan.executionSpec.filters.empreendimento, 'UNI VILLE RESIDENCIAL');
+  assert.equal(purchasedUnitsAndClientsPlan.executionSpec.filters.bloco, '16');
+
+  const cancellationPlan = planQuery({
     message: 'Quantos distratos tem no Campus Vivant?',
     intents: ['distratos'],
     entities: { empreendimento: 'Campus Vivant' },
-  }).planId, 'cancellations_by_project');
+  });
+  assert.equal(cancellationPlan.planId, 'cancellations_by_project');
+  assert.ok(cancellationPlan.requiredPermissions.includes('view_reservas'));
+
+  const topSellerPlan = planQuery({
+    message: 'Qual corretor vendeu mais?',
+    intents: [],
+    entities: {},
+  });
+  assert.equal(topSellerPlan.planId, 'sales_by_project');
+
+  const vgvPlan = planQuery({
+    message: 'Qual empreendimento teve maior VGV?',
+    intents: [],
+    entities: {},
+  });
+  assert.equal(vgvPlan.planId, 'semantic_aggregate');
+  assert.deepEqual(vgvPlan.executionSpec.tables, ['vw_Vendas_Consolidada']);
+  assert.deepEqual(vgvPlan.executionSpec.groupBy, ['empreendimento']);
+  assert.deepEqual(vgvPlan.executionSpec.metric, { function: 'sum', column: 'Valor_VGV_Correto' });
+
+  const cancellationReasonPlan = planQuery({
+    message: 'Quais motivos de cancelamento mais aparecem?',
+    intents: [],
+    entities: {},
+  });
+  assert.equal(cancellationReasonPlan.planId, 'semantic_aggregate');
+  assert.deepEqual(cancellationReasonPlan.executionSpec.tables, ['vw_Vendas_Consolidada']);
+  assert.deepEqual(cancellationReasonPlan.executionSpec.groupBy, ['distrato_motivoDistrato']);
+  assert.deepEqual(cancellationReasonPlan.executionSpec.filters, [{ column: 'Status', operator: 'eq', value: 'INATIVO' }]);
 
   const compositePlan = planQuery({
     message: `Diga pra mim qual é:

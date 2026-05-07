@@ -16,7 +16,15 @@ Regras:
 - Responda somente JSON valido.
 - Nao gere SQL.
 - Use apenas tabelas e colunas presentes no schema enviado.
-- Prefira planos deterministicos quando existirem: cheapest_unit_by_typology, cheapest_projects_by_price, stock_by_project, price_by_project, sales_by_project, cancellations_by_project, leads_summary, precadastros_summary.
+- Por enquanto o Supabase tem somente a tabela vw_Vendas_Consolidada para dados comerciais. Nunca use tabelas antigas como estoque_cvcrm, estoque_lotear, vendas_cvcrm, vendas_lotear, distratos_cvcrm, distratos_lotear, tabela_de_preco_cvcrm, tabela_de_preco_lotear, TB_LEADS ou TB_PRECADASTROS.
+- Prefira planos deterministicos quando existirem: sales_by_project e cancellations_by_project. Use semantic_aggregate somente sobre vw_Vendas_Consolidada.
+- Para qualquer pergunta sobre vendas, compras, reservas, contratos, unidades compradas/vendidas, compradores, clientes compradores, corretores, imobiliarias, Fonte/base, tabela comercial ou VGV, use a tabela vw_Vendas_Consolidada.
+- Para vendas ativas, adicione filtro Status != INATIVO, exceto quando o usuario pedir historico geral incluindo canceladas/distratadas.
+- Para distratos, cancelamentos, rescisoes ou inativos, use a tabela vw_Vendas_Consolidada e filtro Status = INATIVO.
+- Motivo de distrato/cancelamento fica em distrato_motivoDistrato.
+- Tabela comercial da venda fica em nomeTabelaAjustado.
+- Base da venda fica em Fonte.
+- VGV deve usar sempre Valor_VGV_Correto.
 - Quando a pergunta pedir ranking, agrupamento, media, minimo, maximo, soma ou contagem que nao tenha plano fixo obvio, use semantic_aggregate.
 - Para ranking de empreendimentos mais baratos, semantic_aggregate deve agrupar por empreendimento e usar min(valor_total), excluindo termos como garagem, extra, vaga e baia quando a pergunta buscar produto principal.
 - Nunca planeje acoes operacionais como bloquear, reservar, simular financiamento, aprovar credito, acionar corretor ou enviar proposta; use action_not_supported.
@@ -75,17 +83,19 @@ function enrichSemanticFilters(plan, message) {
   const base = parseBaseFromMessage(message);
   if (!base) return plan;
 
-  const tableSuffix = base === 'vca' ? '_cvcrm' : '_lotear';
   const spec = plan.executionSpec || {};
-  const tables = Array.isArray(spec.tables)
-    ? spec.tables.filter((table) => table.endsWith(tableSuffix) || !/_cvcrm$|_lotear$/.test(table))
-    : [];
+  const filters = Array.isArray(spec.filters) ? [...spec.filters] : [];
+  const usesConsolidatedSales = Array.isArray(spec.tables) && spec.tables.includes('vw_Vendas_Consolidada');
+
+  if (usesConsolidatedSales && !filters.some((filter) => filter.column === 'Fonte')) {
+    filters.push({ column: 'Fonte', operator: 'contains', value: base });
+  }
 
   return {
     ...plan,
     executionSpec: {
       ...spec,
-      tables: tables.length > 0 ? tables : spec.tables,
+      filters,
       base,
     },
   };

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Plus,
@@ -7,7 +8,9 @@ import {
   Trash2,
   LogOut,
   Shield,
-  RefreshCw
+  RefreshCw,
+  MoreHorizontal,
+  Download
 } from 'lucide-react';
 import type { Conversation, User } from '@/types';
 import Image from 'next/image';
@@ -20,6 +23,7 @@ interface SidebarProps {
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  onExport: (id: string) => void;
   onSignOut: () => void;
   onOpenSyncModal: () => void;
   syncingDatabase: boolean;
@@ -32,10 +36,13 @@ export default function Sidebar({
   onSelect,
   onNew,
   onDelete,
+  onExport,
   onSignOut,
   onOpenSyncModal,
   syncingDatabase,
 }: SidebarProps) {
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
   return (
     <div className="w-[280px] bg-[#0F0F0F] border-r border-[#222] flex flex-col h-full font-sans">
       {/* Header & Logo */}
@@ -70,7 +77,7 @@ export default function Sidebar({
             conversations.map((conv) => (
               <div
                 key={conv.id}
-                className={`group flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+                className={`group relative flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors ${
                   currentConversationId === conv.id
                     ? 'bg-[#2a2a2a] text-white border border-[#3a3a3a]'
                     : 'text-gray-400 hover:bg-[#1e1e1e] hover:text-gray-100'
@@ -84,12 +91,43 @@ export default function Sidebar({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onDelete(conv.id);
+                    setOpenMenuId((current) => current === conv.id ? null : conv.id);
                   }}
-                  className="opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-[#333] text-gray-500 hover:text-red-400 transition-all ml-2"
+                  className={`p-1.5 rounded hover:bg-[#333] text-gray-500 hover:text-white transition-all ml-2 ${
+                    openMenuId === conv.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                  }`}
+                  aria-label="Opcoes da conversa"
+                  aria-expanded={openMenuId === conv.id}
                 >
-                  <Trash2 size={14} />
+                  <MoreHorizontal size={16} />
                 </button>
+                {openMenuId === conv.id && (
+                  <div
+                    className="absolute right-2 top-9 z-20 w-40 rounded-lg border border-[#333] bg-[#171717] py-1 shadow-xl"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() => {
+                        setOpenMenuId(null);
+                        onExport(conv.id);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-200 hover:bg-[#242424]"
+                    >
+                      <Download size={14} />
+                      Exportar .txt
+                    </button>
+                    <button
+                      onClick={() => {
+                        setOpenMenuId(null);
+                        onDelete(conv.id);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-red-300 hover:bg-[#242424]"
+                    >
+                      <Trash2 size={14} />
+                      Remover
+                    </button>
+                  </div>
+                )}
               </div>
             ))
           )}

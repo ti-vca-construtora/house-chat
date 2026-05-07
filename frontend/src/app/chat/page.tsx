@@ -26,6 +26,7 @@ export default function ChatPage() {
     sendMessage,
     newConversation,
     removeConversation,
+    exportConversation,
   } = useChat();
 
   useEffect(() => {
@@ -110,6 +111,7 @@ export default function ChatPage() {
           onSelect={selectConversation}
           onNew={newConversation}
           onDelete={removeConversation}
+          onExport={exportConversation}
           onSignOut={handleSignOut}
           onOpenSyncModal={handleOpenSyncModal}
           syncingDatabase={syncJob?.status === 'queued' || syncJob?.status === 'running'}

@@ -98,6 +98,17 @@ function parseValue(value, field) {
   }
 
   switch (field.type) {
+    case 'RECORD':
+    case 'STRUCT': {
+      const nestedFields = field.fields || [];
+      const cells = value.f || [];
+      return Object.fromEntries(
+        nestedFields.map((nestedField, index) => [
+          nestedField.name,
+          parseValue(cells[index]?.v, nestedField),
+        ])
+      );
+    }
     case 'INTEGER':
     case 'INT64':
       return Number(value);
@@ -217,4 +228,17 @@ async function queryRows(sql) {
   return rows;
 }
 
-module.exports = { queryRows, getDatasetLocation };
+async function getTableMetadata(tableId) {
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
+  const dataset = process.env.BIGQUERY_DATASET;
+  if (!projectId || !dataset) {
+    throw new Error('GOOGLE_CLOUD_PROJECT_ID e BIGQUERY_DATASET sao obrigatorios para sincronizacao BigQuery');
+  }
+
+  return requestBigQuery(
+    `/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(dataset)}/tables/${encodeURIComponent(tableId)}`,
+    { method: 'GET' }
+  );
+}
+
+module.exports = { queryRows, getDatasetLocation, getTableMetadata };

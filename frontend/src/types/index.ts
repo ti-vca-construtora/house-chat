@@ -30,37 +30,9 @@ export interface ChatResponse {
 export type SyncMode = 'total' | 'partial';
 export type SyncScope =
   | 'all'
-  | 'source:cvcrm'
-  | 'source:lotear'
-  | 'table:empreendimentos_cvcrm'
-  | 'table:vendas_cvcrm'
-  | 'table:estoque_cvcrm'
-  | 'table:distratos_cvcrm'
-  | 'table:tabela_de_preco_cvcrm'
-  | 'table:empreendimentos_lotear'
-  | 'table:vendas_lotear'
-  | 'table:estoque_lotear'
-  | 'table:distratos_lotear'
-  | 'table:tabela_de_preco_lotear'
-  | 'table:TB_HIST_LEADS'
-  | 'table:TB_LEADS'
-  | 'table:TB_PRECADASTROS'
-  | 'table:TB_PRECADASTROS_LOT';
+  | 'table:vw_Vendas_Consolidada';
 export type SyncTableKey =
-  | 'empreendimentos_cvcrm'
-  | 'vendas_cvcrm'
-  | 'estoque_cvcrm'
-  | 'distratos_cvcrm'
-  | 'tabela_de_preco_cvcrm'
-  | 'empreendimentos_lotear'
-  | 'vendas_lotear'
-  | 'estoque_lotear'
-  | 'distratos_lotear'
-  | 'tabela_de_preco_lotear'
-  | 'TB_HIST_LEADS'
-  | 'TB_LEADS'
-  | 'TB_PRECADASTROS'
-  | 'TB_PRECADASTROS_LOT';
+  | 'vw_Vendas_Consolidada';
 
 export interface SyncTableProgress {
   label: string;

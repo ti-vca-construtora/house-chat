@@ -3,7 +3,7 @@ const syncJobService = require('../services/syncJobService');
 
 async function syncEmpreendimentos(req, res, next) {
   try {
-    const result = await bigQuerySyncService.syncScoped('table:empreendimentos_cvcrm', 'total');
+    const result = await bigQuerySyncService.syncScoped('table:vw_Vendas_Consolidada', 'total');
     res.json({ success: true, ...result });
   } catch (err) {
     next(err);
@@ -13,7 +13,7 @@ async function syncEmpreendimentos(req, res, next) {
 async function syncVendas(req, res, next) {
   try {
     const mode = req.body?.mode === 'partial' ? 'partial' : 'total';
-    const result = await bigQuerySyncService.syncScoped('table:vendas_cvcrm', mode);
+    const result = await bigQuerySyncService.syncScoped('table:vw_Vendas_Consolidada', mode);
     res.json({ success: true, ...result });
   } catch (err) {
     next(err);

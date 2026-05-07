@@ -1,4 +1,6 @@
 const supabase = require('../database/supabase');
+const fs = require('fs');
+const path = require('path');
 const { BUSINESS_CATALOG } = require('./businessCatalog');
 const { normalizeText } = require('./queryPlanner');
 
@@ -7,6 +9,7 @@ const CACHE_TTL_MS = 15 * 60 * 1000;
 
 let cachedProfile = null;
 let cachedAt = 0;
+let cachedStaticColumns = null;
 
 function getKnownTables() {
   return [...new Set(
@@ -38,6 +41,39 @@ function compactValue(value) {
   return text.length > 80 ? `${text.slice(0, 77)}...` : value;
 }
 
+function getStaticSchemaColumns() {
+  if (cachedStaticColumns) return cachedStaticColumns;
+
+  cachedStaticColumns = {};
+  const schemaPath = path.join(__dirname, '..', '..', '..', 'supabase', 'vw_vendas_consolidada_schema.sql');
+  try {
+    const sql = fs.readFileSync(schemaPath, 'utf8');
+    const match = sql.match(/CREATE\s+TABLE\s+public\."vw_Vendas_Consolidada"\s*\(([\s\S]*?)\n\);/i);
+    if (match) {
+      cachedStaticColumns.vw_Vendas_Consolidada = [...match[1].matchAll(/^\s+"([^"]+)"\s+/gm)]
+        .map((columnMatch) => columnMatch[1]);
+    }
+  } catch {
+    cachedStaticColumns.vw_Vendas_Consolidada = [];
+  }
+
+  return cachedStaticColumns;
+}
+
+function buildColumnProfile(name, rows) {
+  const values = rows
+    .map((row) => row[name])
+    .filter((value) => value != null && value !== '')
+    .slice(0, 6);
+
+  return {
+    name,
+    role: inferColumnRole(name, values),
+    examples: [...new Set(values.map(compactValue))].slice(0, 4),
+    nullish_in_sample: rows.filter((row) => row[name] == null || row[name] === '').length,
+  };
+}
+
 async function profileTable(tableName) {
   const { data, error, count } = await supabase
     .from(tableName)
@@ -54,20 +90,12 @@ async function profileTable(tableName) {
   }
 
   const rows = data || [];
-  const columnNames = [...new Set(rows.flatMap((row) => Object.keys(row)))];
-  const columns = columnNames.map((name) => {
-    const values = rows
-      .map((row) => row[name])
-      .filter((value) => value != null && value !== '')
-      .slice(0, 6);
-
-    return {
-      name,
-      role: inferColumnRole(name, values),
-      examples: [...new Set(values.map(compactValue))].slice(0, 4),
-      nullish_in_sample: rows.filter((row) => row[name] == null || row[name] === '').length,
-    };
-  });
+  const staticColumns = getStaticSchemaColumns()[tableName] || [];
+  const columnNames = [...new Set([
+    ...staticColumns,
+    ...rows.flatMap((row) => Object.keys(row)),
+  ])];
+  const columns = columnNames.map((name) => buildColumnProfile(name, rows));
 
   return {
     table: tableName,

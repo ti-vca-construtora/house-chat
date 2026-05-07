@@ -55,7 +55,7 @@ const BLOCKED_MESSAGES = {
 const KEYWORD_RULES = [
   {
     intent: 'reservas',
-    pattern: /\breservas?\b|\bvendas?\b|\bcontratos?\b|\bcompradores?\b|\btitulares?\b|\bcompras?\b/i,
+    pattern: /\breservas?\b|\bvendas?\b|\bcontratos?\b|\bcompradores?\b|\btitulares?\b|\bcompras?\b|\bvgv\b/i,
   },
   {
     intent: 'distratos',
@@ -100,8 +100,8 @@ function getBlockedMessage(intent) {
 const CLASSIFIER_SYSTEM = `Você é um classificador de intenções para um sistema imobiliário da VCA Construtora. Dado uma pergunta, retorne um JSON com:
 
 - "intents": array com TODOS os tipos de dados necessários. Inclua todos os relevantes, mesmo quando a pergunta mistura contextos. Valores válidos:
-  - "reservas"        → vendas realizadas, contratos ativos, compradores
-  - "clientes"        → dados de clientes, CPF, corretor, imobiliária
+  - "reservas"        → vendas realizadas, compras, contratos ativos, compradores, VGV, tabela da compra, base/Fonte, corretor da venda, imobiliária da venda
+  - "clientes"        → dados de clientes, CPF, cidade, renda, estado civil, genero/sexo do comprador
   - "empreendimentos" → lista de projetos/obras imobiliárias, endereços, situação da obra
   - "estoque"         → disponibilidade de unidades por situação (disponível, reservado, vendido, bloqueado)
   - "distratos"       → contratos cancelados, rescisões
@@ -113,7 +113,10 @@ const CLASSIFIER_SYSTEM = `Você é um classificador de intenções para um sist
   - "empreendimento": nome do empreendimento (extraia exatamente como escrito pelo usuário, sem correção)
   - "situacao": situação específica mencionada (ex: "disponível", "vendido")
   - "corretor": nome do corretor, se mencionado
+  - "cliente": nome do comprador/cliente, se mencionado
   - "titular": nome do comprador/titular, se mencionado
+  - "imobiliaria": nome da imobiliaria, se mencionado
+  - "tabela": nome da tabela comercial da compra, se mencionada
   - "estado": sigla do estado brasileiro se mencionado (ex: "Bahia" → "BA", "São Paulo" → "SP", "Minas Gerais" → "MG")
   - "cidade": nome da cidade se mencionada
   - "tipologia": tipologia ou característica da unidade mencionada (ex: "2 quartos com suíte", "3 quartos", "lote")
@@ -150,7 +153,10 @@ const CLASSIFIER_SCHEMA = {
         empreendimento: { type: ['string', 'null'] },
         situacao: { type: ['string', 'null'] },
         corretor: { type: ['string', 'null'] },
+        cliente: { type: ['string', 'null'] },
         titular: { type: ['string', 'null'] },
+        imobiliaria: { type: ['string', 'null'] },
+        tabela: { type: ['string', 'null'] },
         estado: { type: ['string', 'null'] },
         cidade: { type: ['string', 'null'] },
         tipologia: { type: ['string', 'null'] },
@@ -168,7 +174,10 @@ const CLASSIFIER_SCHEMA = {
         'empreendimento',
         'situacao',
         'corretor',
+        'cliente',
         'titular',
+        'imobiliaria',
+        'tabela',
         'estado',
         'cidade',
         'tipologia',
@@ -195,10 +204,20 @@ function enrichEntitiesFromMessage(message, entities = {}) {
   const enriched = { ...entities };
   const normalized = normalizeText(message);
   const tipologiaTerms = new Set(Array.isArray(enriched.tipologia_terms) ? enriched.tipologia_terms : []);
+  const invalidProjectCandidate = (value) => {
+    const normalizedValue = normalizeText(value);
+    if (/^(?:bloco|bl|torre|unidade|apto|apartamento)\s*[a-z0-9-]+\b/.test(normalizedValue)) return true;
+    return /^(?:base|fonte)\s+(?:vca|cvcrm|lotear)\b/.test(normalizedValue)
+      || /^(?:vca|cvcrm|lotear)(?:\s+(?:nos?|nós)?\s*temos|\s+hoje|\s+atual)/.test(normalizedValue);
+  };
+
+  if (invalidProjectCandidate(enriched.empreendimento)) {
+    delete enriched.empreendimento;
+  }
 
   if (!enriched.empreendimento) {
     const empreendimentoMatch = normalized.match(/\b(?:no|na|do|da|dos|das)\s+([a-z0-9\s]+?)(?=\s+(?:na|no|da|do)\s+tipologia|\s+(?:de|com)\s+\d|\s+que\b|\s+disponivel\b|\s+mais\b|\?|$)/);
-    if (empreendimentoMatch?.[1]) {
+    if (empreendimentoMatch?.[1] && !invalidProjectCandidate(empreendimentoMatch[1])) {
       enriched.empreendimento = empreendimentoMatch[1]
         .trim()
         .replace(/\b\w/g, (char) => char.toUpperCase());
@@ -206,7 +225,12 @@ function enrichEntitiesFromMessage(message, entities = {}) {
   }
 
   if (!enriched.empreendimento && normalized.includes('uni ville')) {
-    enriched.empreendimento = 'Uni Ville';
+    enriched.empreendimento = 'UNI VILLE RESIDENCIAL';
+  }
+
+  const blocoMatch = normalized.match(/\b(?:bloco|bl|torre)\s*([a-z0-9-]+)\b/);
+  if (blocoMatch && !enriched.bloco) {
+    enriched.bloco = blocoMatch[1].toUpperCase();
   }
 
   const quartosMatch = normalized.match(/\b([1-5])\s*(?:quartos?|dormitorios?|dorms?)\b/);
@@ -256,6 +280,14 @@ function inferIntentsFromMessage(message, parsedIntents = []) {
 
   if (/\bbarat[ao]\b|\bmenor\s+preco\b|\bprecos?\b|\bvalor(?:es)?\b|\btabela\b/.test(normalized)) {
     intents.add('tabela_preco');
+  }
+
+  if (/\bvendas?\b|\bcompras?\b|\breservas?\b|\bcontratos?\b|\bcompradores?\b|\btitulares?\b|\bclientes?\b|\bcorretores?\b|\bimobiliarias?\b|\bvgv\b|\bfonte\b|\bbase\b/.test(normalized)) {
+    intents.add('reservas');
+  }
+
+  if (/\bdistratos?\b|\brescis(?:ao|oes)\b|\bcancelamentos?\b|\bcancelad[ao]s?\b|\binativ[ao]s?\b/.test(normalized)) {
+    intents.add('distratos');
   }
 
   if (intents.size === 0) {

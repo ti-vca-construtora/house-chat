@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "test": "node test/queryPlanner.test.js && node test/queryPlanValidator.test.js"
+    "generate:vendas-consolidada-schema": "node scripts/generate-vendas-consolidada-schema.js",
+    "test": "node test/queryPlanner.test.js && node test/queryPlanValidator.test.js && node test/queryExecutors.test.js"
   },
   "dependencies": {
     "openai": "^6.9.1",

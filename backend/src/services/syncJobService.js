@@ -2,10 +2,7 @@ const { randomUUID } = require('crypto');
 
 const jobs = new Map();
 const TABLE_DEFINITIONS = [
-  ['empreendimentos_cvcrm', 'Empreendimentos VCA'],
-  ['vendas_cvcrm', 'Vendas VCA'],
-  ['empreendimentos_lotear', 'Empreendimentos LOTEAR'],
-  ['vendas_lotear', 'Vendas LOTEAR'],
+  ['vw_Vendas_Consolidada', 'Vendas Consolidada'],
 ];
 
 function createBaseTableState(label) {

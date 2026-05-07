@@ -3,16 +3,11 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Building2,
   CheckCircle2,
   Clock3,
   Database,
-  FileX,
   Loader2,
-  Package,
   RefreshCw,
-  Tag,
-  TrendingUp,
   XCircle,
 } from 'lucide-react';
 import type { SyncJob, SyncMode, SyncScope, SyncTableKey, SyncTableProgress } from '@/types';
@@ -35,23 +30,8 @@ function getModeLabel(mode: SyncMode | null) {
 
 function getScopeLabel(scope: SyncScope | string | null | undefined) {
   switch (scope) {
-    case 'all': return 'Todas as Bases';
-    case 'source:cvcrm': return 'Base VCA';
-    case 'source:lotear': return 'Base LOTEAR';
-    case 'table:empreendimentos_cvcrm': return 'Empreendimentos VCA';
-    case 'table:vendas_cvcrm': return 'Vendas VCA';
-    case 'table:estoque_cvcrm': return 'Estoque VCA';
-    case 'table:distratos_cvcrm': return 'Distratos VCA';
-    case 'table:tabela_de_preco_cvcrm': return 'Tabela de Preços VCA';
-    case 'table:TB_HIST_LEADS': return 'Histórico de Leads';
-    case 'table:TB_LEADS': return 'Leads';
-    case 'table:TB_PRECADASTROS': return 'Pré-cadastros VCA';
-    case 'table:empreendimentos_lotear': return 'Empreendimentos LOTEAR';
-    case 'table:vendas_lotear': return 'Vendas LOTEAR';
-    case 'table:estoque_lotear': return 'Estoque LOTEAR';
-    case 'table:distratos_lotear': return 'Distratos LOTEAR';
-    case 'table:tabela_de_preco_lotear': return 'Tabela de Preços LOTEAR';
-    case 'table:TB_PRECADASTROS_LOT': return 'Pré-cadastros LOTEAR';
+    case 'all': return 'Vendas Consolidada';
+    case 'table:vw_Vendas_Consolidada': return 'Vendas Consolidada';
     default: return 'Banco de Dados';
   }
 }
@@ -65,21 +45,8 @@ function formatEta(estimatedRemainingMs: number | null) {
   return minutes === 0 ? `${seconds}s restantes` : `${minutes}m ${seconds}s restantes`;
 }
 
-//  Table definitions ────────────────────────────────────────────
-
-const TABLE_ROWS = [
-  { label: 'Empreendimentos',  Icon: Building2,  scopeVca: 'table:empreendimentos_cvcrm'   as SyncScope, scopeLotear: 'table:empreendimentos_lotear'   as SyncScope },
-  { label: 'Vendas',           Icon: TrendingUp, scopeVca: 'table:vendas_cvcrm'            as SyncScope, scopeLotear: 'table:vendas_lotear'            as SyncScope },
-  { label: 'Estoque',          Icon: Package,    scopeVca: 'table:estoque_cvcrm'           as SyncScope, scopeLotear: 'table:estoque_lotear'           as SyncScope },
-  { label: 'Distratos',        Icon: FileX,      scopeVca: 'table:distratos_cvcrm'         as SyncScope, scopeLotear: 'table:distratos_lotear'         as SyncScope },
-  { label: 'Tabela de Precos', Icon: Tag,        scopeVca: 'table:tabela_de_preco_cvcrm'   as SyncScope, scopeLotear: 'table:tabela_de_preco_lotear'   as SyncScope },
-];
-
 const ORDERED_TABLE_KEYS: SyncTableKey[] = [
-  'empreendimentos_cvcrm', 'vendas_cvcrm', 'estoque_cvcrm', 'distratos_cvcrm', 'tabela_de_preco_cvcrm',
-  'TB_HIST_LEADS', 'TB_LEADS', 'TB_PRECADASTROS',
-  'empreendimentos_lotear', 'vendas_lotear', 'estoque_lotear', 'distratos_lotear', 'tabela_de_preco_lotear',
-  'TB_PRECADASTROS_LOT',
+  'vw_Vendas_Consolidada',
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -138,7 +105,6 @@ function getOrderedTables(job: SyncJob) {
 // ─── Button styles ────────────────────────────────────────────────────────────
 
 const btnSecondary = 'rounded-lg px-3 py-1.5 text-xs font-medium border border-dark-700 text-dark-300 hover:bg-dark-800 hover:text-dark-100 transition-colors';
-const btnSource    = 'w-full rounded-lg px-3 py-2 text-xs font-semibold border border-dark-700 text-dark-300 hover:bg-dark-800 hover:border-dark-600 hover:text-dark-100 transition-colors mt-1';
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
@@ -184,7 +150,7 @@ export default function SyncDatabaseModal({
                     <p className="text-xs text-dark-400 mt-0.5">
                       {showProgress
                         ? `${getScopeLabel(job?.scope)} — modo ${getModeLabel(job?.mode ?? null)}`
-                        : 'Selecione as tabelas e o modo de sincronizacao.'}
+                        : 'Sincronize a view consolidada do BigQuery.'}
                     </p>
                   </div>
                 </div>
@@ -234,62 +200,8 @@ export default function SyncDatabaseModal({
                     className="w-full flex items-center justify-center gap-2 rounded-xl border border-brand-500/40 bg-brand-600/10 hover:bg-brand-600/20 text-brand-300 font-semibold py-3 text-sm transition-colors"
                   >
                     <RefreshCw size={15} />
-                    Sincronizar todas as tabelas  BigQuery
+                    Sincronizar Vendas Consolidada
                   </button>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    {/* VCA */}
-                    <div className="rounded-xl border border-dark-800 bg-dark-950 overflow-hidden">
-                      <div className="px-4 py-3 border-b border-dark-800 flex items-center justify-between">
-                        <span className="text-sm font-bold text-dark-100">Base VCA</span>
-                        <span className="text-xs text-dark-500 bg-dark-800 px-2 py-0.5 rounded-full">BigQuery VCA</span>
-                      </div>
-                      <div className="divide-y divide-dark-800/60">
-                        {TABLE_ROWS.map(({ label, Icon, scopeVca }) => (
-                          <div key={label} className="flex items-center justify-between px-4 py-3 gap-3 hover:bg-dark-900 group transition-colors">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <Icon size={14} className="text-dark-500 group-hover:text-brand-400 shrink-0 transition-colors" />
-                              <span className="text-sm text-dark-300 group-hover:text-dark-100 transition-colors truncate">{label}</span>
-                            </div>
-                            <button type="button" onClick={() => onConfirm(scopeVca, selectedMode)} className={btnSecondary}>
-                              Sync
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="px-4 pb-4 pt-2">
-                        <button type="button" onClick={() => onConfirm('source:cvcrm', selectedMode)} className={btnSource}>
-                          Sincronizar Base VCA completa
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* LOTEAR */}
-                    <div className="rounded-xl border border-dark-800 bg-dark-950 overflow-hidden">
-                      <div className="px-4 py-3 border-b border-dark-800 flex items-center justify-between">
-                        <span className="text-sm font-bold text-dark-100">Base LOTEAR</span>
-                        <span className="text-xs text-dark-500 bg-dark-800 px-2 py-0.5 rounded-full">BigQuery LOTEAR</span>
-                      </div>
-                      <div className="divide-y divide-dark-800/60">
-                        {TABLE_ROWS.map(({ label, Icon, scopeLotear }) => (
-                          <div key={label} className="flex items-center justify-between px-4 py-3 gap-3 hover:bg-dark-900 group transition-colors">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <Icon size={14} className="text-dark-500 group-hover:text-brand-400 shrink-0 transition-colors" />
-                              <span className="text-sm text-dark-300 group-hover:text-dark-100 transition-colors truncate">{label}</span>
-                            </div>
-                            <button type="button" onClick={() => onConfirm(scopeLotear, selectedMode)} className={btnSecondary}>
-                              Sync
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="px-4 pb-4 pt-2">
-                        <button type="button" onClick={() => onConfirm('source:lotear', selectedMode)} className={btnSource}>
-                          Sincronizar Base LOTEAR completa
-                        </button>
-                      </div>
-                    </div>
-                  </div>
                 </>
               )}
 
