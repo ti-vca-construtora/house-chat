@@ -478,10 +478,18 @@ function addFilterIfMissing(filters, column, operator, value) {
   return hasColumnFilter ? filters : [...filters, { column, operator, value }];
 }
 
-function compareFilterValue(rowValue, operator, expectedValue) {
+function getSemanticSourceAliases(expectedValue) {
+  const normalized = normalizeText(expectedValue);
+  if (!normalized) return [];
+  if (['vca', 'cvcrm'].includes(normalized)) return ['vca', 'cvcrm', 'base'];
+  if (normalized === 'base') return ['base', 'vca', 'cvcrm'];
+  return [normalized];
+}
+
+function compareFilterValue(rowValue, operator, expectedValue, column = '') {
   if (operator === 'in') {
     const list = Array.isArray(expectedValue) ? expectedValue : [expectedValue];
-    return list.some((value) => compareFilterValue(rowValue, 'eq', value));
+    return list.some((value) => compareFilterValue(rowValue, 'eq', value, column));
   }
 
   const rowNumber = Number(rowValue);
@@ -509,6 +517,10 @@ function compareFilterValue(rowValue, operator, expectedValue) {
   const rowText = normalizeText(rowValue);
   const expectedText = normalizeText(expectedValue);
 
+  if (normalizeText(column) === 'fonte' && operator === 'contains') {
+    return getSemanticSourceAliases(expectedValue).some((alias) => rowText.includes(alias));
+  }
+
   if (operator === 'eq') return rowText === expectedText;
   if (operator === 'neq') return rowText !== expectedText;
   if (operator === 'contains') return rowText.includes(expectedText);
@@ -521,7 +533,7 @@ function applySemanticFilters(rows, spec) {
 
   return rows.filter((row) => {
     for (const filter of filters) {
-      if (!compareFilterValue(row[filter.column], filter.operator, filter.value)) return false;
+      if (!compareFilterValue(row[filter.column], filter.operator, filter.value, filter.column)) return false;
     }
 
     for (const exclusion of excludeTerms) {

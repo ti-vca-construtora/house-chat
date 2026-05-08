@@ -107,6 +107,32 @@ const rows = [
     distrato_motivoDistrato: null,
     Valor_VGV_Correto: 210000,
   },
+  {
+    referencia: 5,
+    dataVenda: '2026-01-14T00:00:00Z',
+    cliente: 'Erica Matos',
+    empreendimento: 'PARQUE CENTRAL',
+    etapa: '2',
+    bloco: 'BL04',
+    unidade: '401',
+    tipoVenda: 'Financiamento',
+    cidade: 'Salvador',
+    renda: 12000,
+    sexo: 'F',
+    idade: 35,
+    valorContrato: 500000,
+    estadoCivil: 'Casado',
+    corretor: 'Tiago',
+    imobiliaria: 'Imob D',
+    midia: 'Base interna',
+    nomeTabelaAjustado: 'Tabela Fevereiro',
+    VALOR_ENTRADA: 80000,
+    Fonte: 'BASE',
+    Status: 'ATIVO',
+    distrato_dataCad: null,
+    distrato_motivoDistrato: null,
+    Valor_VGV_Correto: 500000,
+  },
 ];
 
 function normalize(value) {
@@ -250,7 +276,7 @@ async function run() {
 
   assert.equal(vgvAggregate.answer_payload.metric.column, 'Valor_VGV_Correto');
   assert.deepEqual(vgvAggregate.answer_payload.filters, [{ column: 'Status', operator: 'neq', value: 'INATIVO' }]);
-  assert.equal(vgvAggregate.answer_payload.results[0].metric.value, 250000);
+  assert.equal(vgvAggregate.answer_payload.results[0].metric.value, 500000);
 
   calls.length = 0;
   const activeVgvBase = await executePlan({
@@ -272,10 +298,35 @@ async function run() {
     },
   });
 
-  assert.equal(activeVgvBase.answer_payload.total_rows_after_filters, 2);
-  assert.equal(activeVgvBase.answer_payload.results[0].metric.value, 460000);
+  assert.equal(activeVgvBase.answer_payload.total_rows_after_filters, 3);
+  assert.equal(activeVgvBase.answer_payload.results[0].metric.value, 960000);
   assert.match(activeVgvBase.answer_payload.direct_answer, /base VCA/);
   assert.match(activeVgvBase.answer_payload.direct_answer, /vendas ativas/);
+
+  calls.length = 0;
+  const highestVgvBaseProject = await executePlan({
+    planId: 'semantic_aggregate',
+    confidence: 0.9,
+    missingFields: [],
+    requiredPermissions: ['view_reservas'],
+    executionSpec: {
+      message: 'Qual o empreendimento da base VCA com o VGV mais alto atualmente?',
+      tables: ['vw_Vendas_Consolidada'],
+      filters: [
+        { column: 'Fonte', operator: 'contains', value: 'vca' },
+        { column: 'Status', operator: 'neq', value: 'INATIVO' },
+      ],
+      groupBy: ['empreendimento'],
+      metric: { function: 'sum', column: 'Valor_VGV_Correto' },
+      order: { by: 'metric', direction: 'desc' },
+      limit: 5,
+    },
+  });
+
+  assert.equal(highestVgvBaseProject.answer_payload.total_rows_after_filters, 3);
+  assert.equal(highestVgvBaseProject.answer_payload.results[0].group.empreendimento, 'PARQUE CENTRAL');
+  assert.equal(highestVgvBaseProject.answer_payload.results[0].metric.value, 500000);
+  assert.match(highestVgvBaseProject.answer_payload.direct_answer, /PARQUE CENTRAL/);
 
   calls.length = 0;
   const vgvDistratos = await executePlan({
@@ -339,7 +390,7 @@ async function run() {
     },
   });
 
-  assert.equal(incomeAggregate.answer_payload.results[0].metric.value, 7500);
+  assert.equal(incomeAggregate.answer_payload.results[0].metric.value, 8625);
   assert.match(incomeAggregate.answer_payload.direct_answer, /CVCRM/);
 
   calls.length = 0;

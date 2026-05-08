@@ -61,8 +61,8 @@ export default function ChatWindow({ messages, sending, onSend }: ChatWindowProp
                 {[
                   'Qual o empreendimento com mais vendas?',
                   'Quais empreendimentos temos na base Lotear?',
-                  'Situação da obra do Uni Ville?',
-                  'Quantas unidades atualmente disponíveis no Dona Lys?'
+                  'Qual o corretor que mais vendeu até hoje?',
+                  'Cite o top 10 empreendimentos com mais vendas até os dias atuais'
                 ].map((suggestion) => (
                   <button
                     key={suggestion}

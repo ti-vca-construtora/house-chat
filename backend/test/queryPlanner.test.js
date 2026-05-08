@@ -220,6 +220,17 @@ function run() {
   assert.deepEqual(activeVgvPlan.executionSpec.metric, { function: 'sum', column: 'Valor_VGV_Correto' });
   assert.ok(activeVgvPlan.executionSpec.filters.some((filter) => filter.column === 'Status' && filter.operator === 'neq' && filter.value === 'INATIVO'));
 
+  const baseVgvPlan = planQuery({
+    message: 'Qual o empreendimento da base VCA com o VGV mais alto atualmente?',
+    intents: [],
+    entities: {},
+  });
+  assert.equal(baseVgvPlan.planId, 'semantic_aggregate');
+  assert.deepEqual(baseVgvPlan.executionSpec.groupBy, ['empreendimento']);
+  assert.deepEqual(baseVgvPlan.executionSpec.metric, { function: 'sum', column: 'Valor_VGV_Correto' });
+  assert.ok(baseVgvPlan.executionSpec.filters.some((filter) => filter.column === 'Fonte' && filter.operator === 'contains' && filter.value === 'vca'));
+  assert.ok(baseVgvPlan.executionSpec.filters.some((filter) => filter.column === 'Status' && filter.operator === 'neq' && filter.value === 'INATIVO'));
+
   const projectVgvPlan = planQuery({
     message: 'Qual é o VGV do Dona Olivia atualmente?',
     intents: [],
